@@ -1,0 +1,18 @@
+.{
+    .name = "zig-webui-test",
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"zig-webui" = .{
+            .url = "https://github.com/webui-dev/zig-webui/archive/main.tar.gz",
+            .hash = "1220fb4012c7296d2a0b56e2d212ab755056916592772b5ddf236f7dfde573ad59ee",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        // For example...
+        //"LICENSE",
+        //"README.md",
+    },
+}
