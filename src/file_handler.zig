@@ -240,7 +240,7 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
         const content = try fs.cwd().readFileAlloc(allocator, file_path, std.math.maxInt(usize));
 
         const file_type = getFileType(file_path);
-        std.debug.print("Debug: File path: {s}, File type: {}\n", .{ rel_path, file_type });
+        // std.debug.print("Debug: File path: {s}, File type: {}\n", .{ rel_path, file_type });
 
         try files.append(.{
             .path = try allocator.dupe(u8, rel_path),

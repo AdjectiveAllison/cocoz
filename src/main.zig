@@ -23,45 +23,41 @@ pub fn main() !void {
     var result = try file_handler.processDirectory(allocator, current_dir, options);
     defer result.deinit();
 
-    const total_files = result.included_files.len +
-        result.excluded_files.ignored.len +
-        result.excluded_files.configuration.len +
-        result.excluded_files.token_anomaly.len;
-
-    std.debug.print("Found {} files\n", .{total_files});
-
-    std.debug.print("\nIncluded files:\n", .{});
-    for (result.included_files, 0..) |file, i| {
-        std.debug.print("Debug: Processing file index: {}\n", .{i});
-
-        std.debug.print("Debug: File path length: {}\n", .{file.path.len});
-
-        std.debug.print("Debug: File path characters: ", .{});
-        for (file.path) |char| {
-            std.debug.print("{c}", .{char});
+    // Print detected languages
+    if (result.detected_languages.len > 0) {
+        std.debug.print("Detected language{s}: ", .{if (result.detected_languages.len > 1) "s" else ""});
+        for (result.detected_languages, 0..) |lang, i| {
+            if (i > 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{@tagName(lang)});
         }
         std.debug.print("\n", .{});
-
-        // Try writing to stderr instead
-        try std.io.getStdErr().writer().print("Debug: File path (stderr): {s}\n", .{file.path});
-
-        std.debug.print("Debug: Getting file type string\n", .{});
-        const file_type_str = fileTypeToString(file.file_type);
-        std.debug.print("Debug: File type string: {s}\n", .{file_type_str});
-
-        std.debug.print("Debug: Line count: {}\n", .{file.line_count});
-
-        std.debug.print("File: {s}, Type: {s}, Lines: {}\n", .{ file.path, file_type_str, file.line_count });
     }
 
-    std.debug.print("\nAfter processing:\n", .{});
-    std.debug.print("Included files: {}\n", .{result.included_files.len});
-    std.debug.print("Excluded ignored files: {}\n", .{result.excluded_files.ignored.len});
-    std.debug.print("Excluded configuration files: {}\n", .{result.excluded_files.configuration.len});
-    std.debug.print("Excluded token anomaly files: {}\n", .{result.excluded_files.token_anomaly.len});
-
-    std.debug.print("\nDetected languages:\n", .{});
-    for (result.detected_languages) |lang| {
-        std.debug.print("- {s}\n", .{@tagName(lang)});
+    // Print configuration files removed
+    if (result.excluded_files.configuration.len > 0) {
+        std.debug.print("Configuration files removed:\n", .{});
+        for (result.excluded_files.configuration) |file| {
+            std.debug.print("- {s} ({} tokens)\n", .{ file.path, file.token_count });
+        }
     }
+
+    // Print token anomaly information
+    if (result.excluded_files.token_anomaly.len > 0) {
+        std.debug.print("Files excluded due to token count anomaly:\n", .{});
+        for (result.excluded_files.token_anomaly) |file| {
+            std.debug.print("- {s} ({} tokens)\n", .{ file.path, file.token_count });
+        }
+    } else {
+        std.debug.print("Token count anomaly filter was not applied due to low total token count.\n", .{});
+    }
+
+    // Print included files
+    std.debug.print("Included files after filtering:\n", .{});
+    var total_tokens: usize = 0;
+    for (result.included_files) |file| {
+        std.debug.print("- {s} ({} tokens)\n", .{ file.path, file.token_count });
+        total_tokens += file.token_count;
+    }
+
+    std.debug.print("Total tokens after filtering: {}\n", .{total_tokens});
 }
