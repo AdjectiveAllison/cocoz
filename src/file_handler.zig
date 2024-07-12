@@ -135,7 +135,27 @@ pub const ProcessResult = struct {
 };
 
 pub const ProcessOptions = struct {
-    ignore_patterns: []const []const u8 = &.{},
+    ignore_patterns: []const []const u8 = &.{
+        // Language-specific ignores
+        "package-lock.json", "yarn.lock",
+        "npm-debug.log",     "*.tsbuildinfo",
+        "Pipfile.lock",      "*.pyc",
+        "__pycache__",       "*.class",
+        "*.jar",             "target/",
+        "bin/",              "obj/",
+        "*.o",               "*.obj",
+        "*.exe",             "*.dll",
+        "*.so",              "*.dylib",
+        "vendor/",           "composer.lock",
+        "Gemfile.lock",      "*.gem",
+        "go.sum",            "Cargo.lock",
+        "*.swiftmodule",     "*.swiftdoc",
+        "*.kotlin_module",   "build/",
+        ".zig-cache",        "node_modules",
+        // Build files
+        "build.zig",         "Makefile",
+        "CMakeLists.txt",
+    },
     include_dot_files: ?[]const []const u8 = null,
     disable_config_filter: bool = false,
     disable_token_filter: bool = false,
@@ -187,7 +207,7 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
-    const hard_coded_ignores = [_][]const u8{ ".git", ".svn", ".hg", ".bzr", "CVS", "node_modules", ".zig-cache" };
+    const hard_coded_ignores = [_][]const u8{ ".git", ".svn", ".hg", ".bzr", "CVS" };
 
     while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
