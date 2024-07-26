@@ -406,6 +406,9 @@ pub fn processDirectory(allocator: Allocator, directory: []const u8, options: Pr
 
 fn getFileType(file_path: []const u8) FileType {
     const ext = path.extension(file_path);
+    // TODO: What should we do if something isn't accounted for in additional file types or language extensions?
+    // Currently, it will return as Language.unknown, but maybe a generic text based file type would be better?
+    // Then checking for language first before additional File type would be better?
     if (AdditionalFileType.fromExtension(ext)) |additional| {
         return FileType{ .additional = additional };
     } else {
