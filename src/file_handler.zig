@@ -19,6 +19,7 @@ pub const FileInfo = struct {
 pub const FileType = union(enum) {
     language: Language,
     additional: AdditionalFileType,
+    unknown: void,
 };
 
 pub const Language = enum {
@@ -36,9 +37,8 @@ pub const Language = enum {
     kotlin,
     scala,
     zig,
-    unknown,
 
-    pub fn fromExtension(ext: []const u8) Language {
+    pub fn fromExtension(ext: []const u8) ?Language {
         const extensions = [_]struct { []const u8, Language }{
             .{ ".js", .javascript }, .{ ".jsx", .javascript }, .{ ".mjs", .javascript },
             .{ ".ts", .typescript }, .{ ".tsx", .typescript }, .{ ".py", .python },
@@ -54,7 +54,7 @@ pub const Language = enum {
                 return entry[1];
             }
         }
-        return .unknown;
+        return null;
     }
 };
 
@@ -240,6 +240,12 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
         const content = try fs.cwd().readFileAlloc(allocator, file_path, std.math.maxInt(usize));
 
         const file_type = getFileType(file_path);
+
+        if (file_type == FileType.unknown) {
+            std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{rel_path});
+            allocator.free(content);
+            continue;
+        }
         // std.debug.print("Debug: File path: {s}, File type: {}\n", .{ rel_path, file_type });
 
         try files.append(.{
@@ -257,6 +263,7 @@ pub fn estimateTokenCount(content: []const u8, file_type: FileType) usize {
     const base_count = switch (file_type) {
         .language => |lang| estimateLanguageTokens(content, lang),
         .additional => |additional| estimateAdditionalTokens(content, additional),
+        .unknown => unreachable, // Handle unknown types before this.,
     };
     return base_count;
 }
@@ -269,7 +276,7 @@ fn estimateLanguageTokens(content: []const u8, language: Language) usize {
         .python => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.30),
         .java, .csharp => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.28),
         .cpp, .rust, .go => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.25),
-        .zig => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.22),
+        .zig => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.24),
         else => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.25),
     };
 }
@@ -409,11 +416,15 @@ fn getFileType(file_path: []const u8) FileType {
     // TODO: What should we do if something isn't accounted for in additional file types or language extensions?
     // Currently, it will return as Language.unknown, but maybe a generic text based file type would be better?
     // Then checking for language first before additional File type would be better?
+    if (Language.fromExtension(ext)) |language| {
+        return FileType{ .language = language };
+    }
+
     if (AdditionalFileType.fromExtension(ext)) |additional| {
         return FileType{ .additional = additional };
-    } else {
-        return FileType{ .language = Language.fromExtension(ext) };
     }
+
+    return FileType.unknown;
 }
 
 fn countLines(content: []const u8) !usize {
