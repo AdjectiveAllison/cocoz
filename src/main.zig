@@ -18,7 +18,9 @@ pub fn main() !void {
 
     std.debug.print("Processing directory: {s}\n", .{current_dir});
 
-    const options = file_handler.ProcessOptions{};
+    const options = file_handler.ProcessOptions{ .ignore_patterns = &.{
+        "themes/",
+    } };
 
     var result = try file_handler.processDirectory(allocator, current_dir, options);
     defer result.deinit();

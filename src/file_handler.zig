@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArrayList = std.ArrayList;
 const fs = std.fs;
 const path = std.fs.path;
 const Allocator = std.mem.Allocator;
@@ -63,6 +64,12 @@ pub const Language = enum {
 
 // TODO: file types we know we aren't supporting but not sure what to do with yet:
 // 1. pdf
+// 2. mp3
+// TODO: add the following file types when ready
+// 1. xml
+// 2. ico
+// 3. csv
+// 4. css/scss (Are these languages?)
 pub const AdditionalFileType = enum {
     yaml,
     yml,
@@ -175,12 +182,27 @@ pub const ProcessOptions = struct {
 const TokenAnomalyThreshold = 10000;
 const TotalTokenThreshold = 50000;
 
-fn readGitignore(allocator: Allocator, directory: []const u8) ![]const []const u8 {
+const GitIgnorePattern = struct {
+    pattern: []const u8,
+    is_negation: bool,
+    is_directory_only: bool,
+    is_anchored: bool,
+};
+
+const GitIgnoreContext = struct {
+    patterns: ArrayList(GitIgnorePattern),
+    base_path: []const u8,
+};
+
+fn readAndParseGitignore(allocator: Allocator, directory: []const u8) !GitIgnoreContext {
     const gitignore_path = try path.join(allocator, &.{ directory, ".gitignore" });
     defer allocator.free(gitignore_path);
 
     const file = std.fs.openFileAbsolute(gitignore_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return &.{},
+        error.FileNotFound => return GitIgnoreContext{
+            .patterns = ArrayList(GitIgnorePattern).init(allocator),
+            .base_path = try allocator.dupe(u8, directory),
+        },
         else => return err,
     };
     defer file.close();
@@ -188,35 +210,98 @@ fn readGitignore(allocator: Allocator, directory: []const u8) ![]const []const u
     const content = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(content);
 
-    var patterns = std.ArrayList([]const u8).init(allocator);
+    const patterns = try parseGitIgnoreFile(allocator, content);
+    return GitIgnoreContext{
+        .patterns = patterns,
+        .base_path = try allocator.dupe(u8, directory),
+    };
+}
+
+fn parseGitIgnoreFile(allocator: Allocator, content: []const u8) !ArrayList(GitIgnorePattern) {
+    var patterns = ArrayList(GitIgnorePattern).init(allocator);
+    errdefer patterns.deinit();
+
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
         const trimmed = std.mem.trim(u8, line, " \t");
-        if (trimmed.len > 0 and !std.mem.startsWith(u8, trimmed, "#")) {
-            try patterns.append(try allocator.dupe(u8, trimmed));
+        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+
+        var pattern = GitIgnorePattern{
+            .pattern = trimmed,
+            .is_negation = false,
+            .is_directory_only = false,
+            .is_anchored = false,
+        };
+
+        if (pattern.pattern[0] == '!') {
+            pattern.is_negation = true;
+            pattern.pattern = pattern.pattern[1..];
         }
+
+        if (pattern.pattern[pattern.pattern.len - 1] == '/') {
+            pattern.is_directory_only = true;
+            pattern.pattern = pattern.pattern[0 .. pattern.pattern.len - 1];
+        }
+
+        if (pattern.pattern[0] == '/') {
+            pattern.is_anchored = true;
+            pattern.pattern = pattern.pattern[1..];
+        }
+
+        try patterns.append(pattern);
     }
 
-    return patterns.toOwnedSlice();
+    return patterns;
 }
 
+fn isIgnored(full_path: []const u8, gitignore_stack: []const GitIgnoreContext) bool {
+    var ignored = false;
+    for (gitignore_stack) |context| {
+        // Check if the full_path is within or at the same level as the gitignore context
+        if (!std.mem.startsWith(u8, full_path, context.base_path)) continue;
+
+        // Get the path relative to the current gitignore context
+        const rel_to_context = full_path[context.base_path.len..];
+        const path_to_check = if (rel_to_context.len > 0 and rel_to_context[0] == path.sep) rel_to_context[1..] else rel_to_context;
+
+        for (context.patterns.items) |pattern| {
+            if (matchPattern(path_to_check, pattern)) {
+                ignored = !pattern.is_negation;
+            }
+        }
+    }
+    return ignored;
+}
+
+fn matchPattern(target_path: []const u8, pattern: GitIgnorePattern) bool {
+    if (pattern.is_anchored) {
+        return std.mem.startsWith(u8, target_path, pattern.pattern);
+    } else {
+        // For non-anchored patterns, we need to check if it matches any part of the path
+        var components = std.mem.splitScalar(u8, target_path, path.sep);
+        while (components.next()) |component| {
+            if (std.mem.startsWith(u8, component, pattern.pattern)) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
 pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
-    var files = std.ArrayList(FileInfo).init(allocator);
+    var files = ArrayList(FileInfo).init(allocator);
     errdefer files.deinit();
 
-    var gitignore_stack = std.ArrayList([]const []const u8).init(allocator);
+    var gitignore_stack = ArrayList(GitIgnoreContext).init(allocator);
     defer {
-        for (gitignore_stack.items) |patterns| {
-            for (patterns) |pattern| {
-                allocator.free(pattern);
-            }
-            allocator.free(patterns);
+        for (gitignore_stack.items) |context| {
+            context.patterns.deinit();
+            allocator.free(context.base_path);
         }
         gitignore_stack.deinit();
     }
 
     // Read the root .gitignore
-    const root_gitignore = try readGitignore(allocator, directory);
+    const root_gitignore = try readAndParseGitignore(allocator, directory);
     try gitignore_stack.append(root_gitignore);
 
     var dir = try fs.openDirAbsolute(directory, .{ .iterate = true });
@@ -236,20 +321,18 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
 
         // Check if we've moved up in the directory structure
         while (gitignore_stack.items.len > 1) {
-            const top_gitignore_dir = path.dirname(gitignore_stack.items[gitignore_stack.items.len - 1][0]) orelse "";
+            const top_gitignore_dir = path.dirname(gitignore_stack.items[gitignore_stack.items.len - 1].base_path) orelse "";
             if (std.mem.startsWith(u8, entry.path, top_gitignore_dir)) break;
 
             const popped = gitignore_stack.pop();
-            for (popped) |pattern| {
-                allocator.free(pattern);
-            }
-            allocator.free(popped);
+            popped.patterns.deinit();
+            allocator.free(popped.base_path);
         }
 
         // Check if this is a new .gitignore file
         if (std.mem.eql(u8, path.basename(entry.path), ".gitignore")) {
             const gitignore_dir = path.dirname(full_path) orelse directory;
-            const new_gitignore = try readGitignore(allocator, gitignore_dir);
+            const new_gitignore = try readAndParseGitignore(allocator, gitignore_dir);
             try gitignore_stack.append(new_gitignore);
             continue;
         }
@@ -264,16 +347,7 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
         if (should_hard_ignore) continue;
 
         // Check .gitignore patterns
-        const should_ignore = ignore_check: {
-            for (gitignore_stack.items) |patterns| {
-                for (patterns) |pattern| {
-                    if (std.mem.indexOf(u8, rel_path, pattern) != null) {
-                        break :ignore_check true;
-                    }
-                }
-            }
-            break :ignore_check false;
-        };
+        const should_ignore = isIgnored(full_path, gitignore_stack.items);
 
         if (should_ignore) continue;
 
