@@ -13,7 +13,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const current_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const current_dir = try std.fs.cwd().realpathAlloc(allocator, "../bork");
     defer allocator.free(current_dir);
 
     std.debug.print("Processing directory: {s}\n", .{current_dir});
@@ -29,6 +29,16 @@ pub fn main() !void {
         for (result.detected_languages, 0..) |lang, i| {
             if (i > 0) std.debug.print(", ", .{});
             std.debug.print("{s}", .{@tagName(lang)});
+        }
+        std.debug.print("\n", .{});
+    }
+
+    // Print detected languages
+    if (result.detected_file_types.len > 0) {
+        std.debug.print("Detected file type{s}: ", .{if (result.detected_file_types.len > 1) "s" else ""});
+        for (result.detected_file_types, 0..) |additional, i| {
+            if (i > 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{@tagName(additional)});
         }
         std.debug.print("\n", .{});
     }

@@ -25,6 +25,7 @@ pub const FileType = union(enum) {
 pub const Language = enum {
     javascript,
     typescript,
+    html,
     python,
     java,
     csharp,
@@ -41,13 +42,14 @@ pub const Language = enum {
     pub fn fromExtension(ext: []const u8) ?Language {
         const extensions = [_]struct { []const u8, Language }{
             .{ ".js", .javascript }, .{ ".jsx", .javascript }, .{ ".mjs", .javascript },
-            .{ ".ts", .typescript }, .{ ".tsx", .typescript }, .{ ".py", .python },
-            .{ ".pyw", .python },    .{ ".java", .java },      .{ ".cs", .csharp },
-            .{ ".cpp", .cpp },       .{ ".cxx", .cpp },        .{ ".cc", .cpp },
-            .{ ".c", .cpp },         .{ ".h", .cpp },          .{ ".hpp", .cpp },
-            .{ ".php", .php },       .{ ".rb", .ruby },        .{ ".go", .go },
-            .{ ".rs", .rust },       .{ ".swift", .swift },    .{ ".kt", .kotlin },
-            .{ ".kts", .kotlin },    .{ ".scala", .scala },    .{ ".zig", .zig },
+            .{ ".ts", .typescript }, .{ ".tsx", .typescript }, .{ ".html", .html },
+            .{ ".py", .python },     .{ ".pyw", .python },     .{ ".java", .java },
+            .{ ".cs", .csharp },     .{ ".cpp", .cpp },        .{ ".cxx", .cpp },
+            .{ ".cc", .cpp },        .{ ".c", .cpp },          .{ ".h", .cpp },
+            .{ ".hpp", .cpp },       .{ ".php", .php },        .{ ".rb", .ruby },
+            .{ ".go", .go },         .{ ".rs", .rust },        .{ ".swift", .swift },
+            .{ ".kt", .kotlin },     .{ ".kts", .kotlin },     .{ ".scala", .scala },
+            .{ ".zig", .zig },
         };
         for (extensions) |entry| {
             if (std.mem.eql(u8, ext, entry[0])) {
@@ -90,6 +92,9 @@ pub const AdditionalFileType = enum {
     }
 
     pub fn fromExtension(ext: []const u8) ?AdditionalFileType {
+        if (ext.len < 2) {
+            return null;
+        }
         inline for (std.meta.fields(AdditionalFileType)) |field| {
             if (std.mem.eql(u8, ext[1..], field.name)) {
                 return @field(AdditionalFileType, field.name);
@@ -107,6 +112,7 @@ pub const ProcessResult = struct {
         token_anomaly: []FileInfo,
     },
     detected_languages: []Language,
+    detected_file_types: []AdditionalFileType,
     allocator: Allocator,
 
     pub fn deinit(self: *ProcessResult) void {
@@ -131,6 +137,7 @@ pub const ProcessResult = struct {
         self.allocator.free(self.excluded_files.token_anomaly);
 
         self.allocator.free(self.detected_languages);
+        self.allocator.free(self.detected_file_types);
     }
 };
 
@@ -212,7 +219,10 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
     while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
 
-        const rel_path = try path.relative(allocator, directory, entry.path);
+        const file_path = try path.join(allocator, &.{ directory, entry.path });
+        defer allocator.free(file_path);
+
+        const rel_path = try path.relative(allocator, directory, file_path);
         defer allocator.free(rel_path);
 
         // Check hard-coded ignores
@@ -234,19 +244,16 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
         }
         if (should_ignore) continue;
 
-        const file_path = try path.join(allocator, &.{ directory, entry.path });
-        defer allocator.free(file_path);
-
         const content = try fs.cwd().readFileAlloc(allocator, file_path, std.math.maxInt(usize));
 
         const file_type = getFileType(file_path);
 
         if (file_type == FileType.unknown) {
+            // TODO: Detect if an unknown file type is a text file or binary, and potentially add ability to include the file if desired.
             std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{rel_path});
             allocator.free(content);
             continue;
         }
-        // std.debug.print("Debug: File path: {s}, File type: {}\n", .{ rel_path, file_type });
 
         try files.append(.{
             .path = try allocator.dupe(u8, rel_path),
@@ -296,8 +303,11 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
     var excluded_config = std.ArrayList(FileInfo).init(allocator);
     var excluded_token = std.ArrayList(FileInfo).init(allocator);
     var unique_languages = std.AutoHashMap(Language, void).init(allocator);
+    var unique_file_types = std.AutoHashMap(AdditionalFileType, void).init(allocator);
+
     defer {
         unique_languages.deinit();
+        unique_file_types.deinit();
 
         for (included.items) |*file| {
             file.deinit(allocator);
@@ -348,6 +358,7 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
             try included.append(file);
             switch (file.file_type) {
                 .language => |lang| try unique_languages.put(lang, {}),
+                .additional => |additional| try unique_file_types.put(additional, {}),
                 else => {},
             }
         }
@@ -393,6 +404,14 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
         i += 1;
     }
 
+    var detected_file_types = try allocator.alloc(AdditionalFileType, unique_file_types.count());
+    var file_i: usize = 0;
+    var file_it = unique_file_types.keyIterator();
+    while (file_it.next()) |additional| {
+        detected_file_types[file_i] = additional.*;
+        file_i += 1;
+    }
+
     return ProcessResult{
         .included_files = try included.toOwnedSlice(),
         .excluded_files = .{
@@ -401,6 +420,7 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
             .token_anomaly = try excluded_token.toOwnedSlice(),
         },
         .detected_languages = detected_languages,
+        .detected_file_types = detected_file_types,
         .allocator = allocator,
     };
 }
@@ -413,9 +433,6 @@ pub fn processDirectory(allocator: Allocator, directory: []const u8, options: Pr
 
 fn getFileType(file_path: []const u8) FileType {
     const ext = path.extension(file_path);
-    // TODO: What should we do if something isn't accounted for in additional file types or language extensions?
-    // Currently, it will return as Language.unknown, but maybe a generic text based file type would be better?
-    // Then checking for language first before additional File type would be better?
     if (Language.fromExtension(ext)) |language| {
         return FileType{ .language = language };
     }
