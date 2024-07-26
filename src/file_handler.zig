@@ -245,12 +245,42 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
         try files.append(.{
             .path = try allocator.dupe(u8, rel_path),
             .content = content,
-            .token_count = 0,
+            .token_count = estimateTokenCount(content, file_type),
             .line_count = try countLines(content),
             .file_type = file_type,
         });
     }
     return try files.toOwnedSlice();
+}
+
+pub fn estimateTokenCount(content: []const u8, file_type: FileType) usize {
+    const base_count = switch (file_type) {
+        .language => |lang| estimateLanguageTokens(content, lang),
+        .additional => |additional| estimateAdditionalTokens(content, additional),
+    };
+    return base_count;
+}
+
+fn estimateLanguageTokens(content: []const u8, language: Language) usize {
+    const char_count = content.len;
+
+    return switch (language) {
+        .javascript, .typescript => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.35),
+        .python => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.30),
+        .java, .csharp => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.28),
+        .cpp, .rust, .go => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.25),
+        .zig => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.22),
+        else => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.25),
+    };
+}
+
+fn estimateAdditionalTokens(content: []const u8, file_type: AdditionalFileType) usize {
+    const char_count = content.len;
+
+    return switch (file_type) {
+        .yaml, .yml => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.27),
+        else => @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.25),
+    };
 }
 
 pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOptions) !ProcessResult {
