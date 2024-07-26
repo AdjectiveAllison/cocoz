@@ -283,11 +283,22 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
 
         const file_type = getFileType(full_path);
 
-        if (file_type == .unknown) {
-            // TODO: Detect if an unknown file type is a text file or binary, and potentially add ability to include the file if desired.
-            std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{rel_path});
-            allocator.free(content);
-            continue;
+        // TODO: Detect if an unknown file type is a text file or binary, and potentially add ability to include the file if desired.
+        // Also decide if we want to do something with images as well.
+        switch (file_type) {
+            .unknown => {
+                std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{rel_path});
+                allocator.free(content);
+                continue;
+            },
+            .additional => |additional| {
+                if (additional.getInfo() == .image) {
+                    std.debug.print("Skipping over image file {s}.\n", .{rel_path});
+                    allocator.free(content);
+                    continue;
+                }
+            },
+            .language => {},
         }
 
         try files.append(.{
