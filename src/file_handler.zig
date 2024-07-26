@@ -69,6 +69,7 @@ pub const AdditionalFileType = enum {
     conf,
     json,
     zon,
+    cfg,
     md,
     rst,
     txt,
@@ -86,7 +87,7 @@ pub const AdditionalFileType = enum {
 
     pub fn getInfo(self: AdditionalFileType) FileTypeInfo {
         return switch (self) {
-            .yaml, .yml, .toml, .ini, .conf, .json, .zon => .config,
+            .yaml, .yml, .toml, .ini, .conf, .json, .zon, .cfg => .config,
             .md, .rst, .txt => .documentation,
             .png, .jpg, .jpeg, .gif, .svg => .image,
         };
