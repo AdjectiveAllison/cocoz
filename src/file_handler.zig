@@ -61,6 +61,8 @@ pub const Language = enum {
     }
 };
 
+// TODO: file types we know we aren't supporting but not sure what to do with yet:
+// 1. pdf
 pub const AdditionalFileType = enum {
     yaml,
     yml,
