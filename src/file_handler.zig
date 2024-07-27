@@ -190,8 +190,14 @@ const GitIgnorePattern = struct {
 };
 
 const GitIgnoreContext = struct {
-    patterns: ArrayList(GitIgnorePattern),
+    patterns: []GitIgnorePattern,
     base_path: []const u8,
+    pub fn deinit(self: GitIgnoreContext, allocator: std.mem.Allocator) void {
+        allocator.free(self.base_path);
+        for (self.patterns) |*pattern| {
+            allocator.free(pattern.pattern);
+        }
+    }
 };
 
 fn readAndParseGitignore(allocator: Allocator, directory: []const u8) !GitIgnoreContext {
@@ -200,7 +206,7 @@ fn readAndParseGitignore(allocator: Allocator, directory: []const u8) !GitIgnore
 
     const file = std.fs.openFileAbsolute(gitignore_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return GitIgnoreContext{
-            .patterns = ArrayList(GitIgnorePattern).init(allocator),
+            .patterns = &[_]GitIgnorePattern{},
             .base_path = try allocator.dupe(u8, directory),
         },
         else => return err,
@@ -217,9 +223,14 @@ fn readAndParseGitignore(allocator: Allocator, directory: []const u8) !GitIgnore
     };
 }
 
-fn parseGitIgnoreFile(allocator: Allocator, content: []const u8) !ArrayList(GitIgnorePattern) {
-    var patterns = ArrayList(GitIgnorePattern).init(allocator);
-    errdefer patterns.deinit();
+fn parseGitIgnoreFile(allocator: Allocator, content: []const u8) ![]GitIgnorePattern {
+    var patterns = std.ArrayList(GitIgnorePattern).init(allocator);
+    errdefer {
+        for (patterns.items) |pattern| {
+            allocator.free(pattern.pattern);
+        }
+        patterns.deinit();
+    }
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
@@ -227,31 +238,34 @@ fn parseGitIgnoreFile(allocator: Allocator, content: []const u8) !ArrayList(GitI
         if (trimmed.len == 0 or trimmed[0] == '#') continue;
 
         var pattern = GitIgnorePattern{
-            .pattern = trimmed,
+            .pattern = undefined,
             .is_negation = false,
             .is_directory_only = false,
             .is_anchored = false,
         };
 
-        if (pattern.pattern[0] == '!') {
+        var pattern_slice = trimmed;
+
+        if (pattern_slice[0] == '!') {
             pattern.is_negation = true;
-            pattern.pattern = pattern.pattern[1..];
+            pattern_slice = pattern_slice[1..];
         }
 
-        if (pattern.pattern[pattern.pattern.len - 1] == '/') {
+        if (pattern_slice[pattern_slice.len - 1] == '/') {
             pattern.is_directory_only = true;
-            pattern.pattern = pattern.pattern[0 .. pattern.pattern.len - 1];
+            pattern_slice = pattern_slice[0 .. pattern_slice.len - 1];
         }
 
-        if (pattern.pattern[0] == '/') {
+        if (pattern_slice[0] == '/') {
             pattern.is_anchored = true;
-            pattern.pattern = pattern.pattern[1..];
+            pattern_slice = pattern_slice[1..];
         }
 
+        pattern.pattern = try allocator.dupe(u8, pattern_slice);
         try patterns.append(pattern);
     }
 
-    return patterns;
+    return patterns.toOwnedSlice();
 }
 
 fn isIgnored(full_path: []const u8, gitignore_stack: []const GitIgnoreContext) bool {
@@ -264,7 +278,7 @@ fn isIgnored(full_path: []const u8, gitignore_stack: []const GitIgnoreContext) b
         const rel_to_context = full_path[context.base_path.len..];
         const path_to_check = if (rel_to_context.len > 0 and rel_to_context[0] == path.sep) rel_to_context[1..] else rel_to_context;
 
-        for (context.patterns.items) |pattern| {
+        for (context.patterns) |pattern| {
             if (matchPattern(path_to_check, pattern)) {
                 ignored = !pattern.is_negation;
             }
@@ -275,18 +289,39 @@ fn isIgnored(full_path: []const u8, gitignore_stack: []const GitIgnoreContext) b
 
 fn matchPattern(target_path: []const u8, pattern: GitIgnorePattern) bool {
     if (pattern.is_anchored) {
-        return std.mem.startsWith(u8, target_path, pattern.pattern);
+        if (pattern.is_directory_only) {
+            // For anchored directory-only patterns, the target path should start with the pattern
+            // and either end with a separator or have a separator right after the pattern
+            return std.mem.startsWith(u8, target_path, pattern.pattern) and
+                (target_path.len == pattern.pattern.len or
+                (target_path.len > pattern.pattern.len and target_path[pattern.pattern.len] == path.sep));
+        } else {
+            // For anchored file patterns, it should match exactly at the start
+            return std.mem.startsWith(u8, target_path, pattern.pattern);
+        }
     } else {
-        // For non-anchored patterns, we need to check if it matches any part of the path
-        var components = std.mem.splitScalar(u8, target_path, path.sep);
-        while (components.next()) |component| {
-            if (std.mem.startsWith(u8, component, pattern.pattern)) {
-                return true;
+        // For non-anchored patterns
+        if (pattern.is_directory_only) {
+            // Check if any component of the path matches the pattern exactly
+            var components = std.mem.splitScalar(u8, target_path, path.sep);
+            while (components.next()) |component| {
+                if (std.mem.eql(u8, component, pattern.pattern)) {
+                    return true;
+                }
+            }
+        } else {
+            // Check if any component of the path starts with the pattern
+            var components = std.mem.splitScalar(u8, target_path, path.sep);
+            while (components.next()) |component| {
+                if (std.mem.startsWith(u8, component, pattern.pattern)) {
+                    return true;
+                }
             }
         }
-        return false;
     }
+    return false;
 }
+
 pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
     var files = ArrayList(FileInfo).init(allocator);
     errdefer files.deinit();
@@ -294,8 +329,7 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
     var gitignore_stack = ArrayList(GitIgnoreContext).init(allocator);
     defer {
         for (gitignore_stack.items) |context| {
-            context.patterns.deinit();
-            allocator.free(context.base_path);
+            context.deinit(allocator);
         }
         gitignore_stack.deinit();
     }
@@ -325,8 +359,7 @@ pub fn getFileList(allocator: Allocator, directory: []const u8) ![]FileInfo {
             if (std.mem.startsWith(u8, entry.path, top_gitignore_dir)) break;
 
             const popped = gitignore_stack.pop();
-            popped.patterns.deinit();
-            allocator.free(popped.base_path);
+            popped.deinit(allocator);
         }
 
         // Check if this is a new .gitignore file
