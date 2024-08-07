@@ -65,11 +65,13 @@ pub const Language = enum {
 // TODO: file types we know we aren't supporting but not sure what to do with yet:
 // 1. pdf
 // 2. mp3
+// 3. ttf
 // TODO: add the following file types when ready
 // 1. xml
 // 2. ico
 // 3. csv
 // 4. css/scss (Are these languages?)
+// TODO: What to do with files without extensions?! e.g. LICENSE
 pub const AdditionalFileType = enum {
     yaml,
     yml,
@@ -197,6 +199,7 @@ const GitIgnoreContext = struct {
         for (self.patterns) |*pattern| {
             allocator.free(pattern.pattern);
         }
+        allocator.free(self.patterns);
     }
 };
 

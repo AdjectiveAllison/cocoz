@@ -13,7 +13,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const current_dir = try std.fs.cwd().realpathAlloc(allocator, "../website");
+    const current_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(current_dir);
 
     std.debug.print("Processing directory: {s}\n", .{current_dir});
