@@ -37,8 +37,38 @@ pub fn writeXml(writer: anytype, result: file_handler.ProcessResult) !void {
     try writer.writeAll("    </file-types>\n");
     try writer.writeAll("  </metadata>\n");
 
-    // Write files section
-    try writer.writeAll("  <files>\n");
+    // Write excluded files section
+    try writer.writeAll("  <excluded-files>\n");
+    for (result.excluded_files) |excluded| {
+        try writer.print("    <file path=\"{s}\" tokens=\"{d}\" lines=\"{d}\" type=\"{s}\">\n", .{
+            excluded.file.path,
+            excluded.file.token_count,
+            excluded.file.line_count,
+            switch (excluded.file.file_type) {
+                .language => |lang| @tagName(lang),
+                .additional => |add| @tagName(add),
+                .unknown => "unknown",
+            },
+        });
+        try writer.writeAll("      <reason>");
+        switch (excluded.reason) {
+            .ignored => |pattern| try writer.print("ignored by pattern: {s}", .{pattern}),
+            .configuration => try writer.writeAll("configuration file"),
+            .token_anomaly => |info| try writer.print("token count {d} exceeds threshold {d} (avg: {d:.2}, std_dev: {d:.2})", .{
+                info.token_count,
+                info.threshold,
+                info.average,
+                info.std_dev,
+            }),
+            .binary => try writer.writeAll("binary file"),
+        }
+        try writer.writeAll("</reason>\n");
+        try writer.writeAll("    </file>\n");
+    }
+    try writer.writeAll("  </excluded-files>\n");
+
+    // Write included files section
+    try writer.writeAll("  <included-files>\n");
     for (result.included_files) |file| {
         try writer.print("    <file path=\"{s}\" tokens=\"{d}\" lines=\"{d}\" type=\"{s}\">\n", .{
             file.path,
@@ -55,7 +85,7 @@ pub fn writeXml(writer: anytype, result: file_handler.ProcessResult) !void {
         try writer.writeAll("\n      ]]>\n");
         try writer.writeAll("    </file>\n");
     }
-    try writer.writeAll("  </files>\n");
+    try writer.writeAll("  </included-files>\n");
 
     try writer.writeAll("</code-context>\n");
 }
@@ -90,8 +120,37 @@ pub fn writeJson(writer: anytype, result: file_handler.ProcessResult) !void {
     }
     try writer.writeAll("]\n  },\n");
 
-    // Write files
-    try writer.writeAll("  \"files\": [\n");
+    // Write excluded files
+    try writer.writeAll("  \"excludedFiles\": [\n");
+    for (result.excluded_files, 0..) |excluded, i| {
+        if (i > 0) try writer.writeAll(",\n");
+        try writer.writeAll("    {\n");
+        try writer.print("      \"path\": \"{s}\",\n", .{excluded.file.path});
+        try writer.print("      \"tokens\": {d},\n", .{excluded.file.token_count});
+        try writer.print("      \"lines\": {d},\n", .{excluded.file.line_count});
+        try writer.print("      \"type\": \"{s}\",\n", .{switch (excluded.file.file_type) {
+            .language => |lang| @tagName(lang),
+            .additional => |add| @tagName(add),
+            .unknown => "unknown",
+        }});
+        try writer.writeAll("      \"reason\": ");
+        switch (excluded.reason) {
+            .ignored => |pattern| try writer.print("\"ignored by pattern: {s}\"", .{pattern}),
+            .configuration => try writer.writeAll("\"configuration file\""),
+            .token_anomaly => |info| try writer.print("\"token count {d} exceeds threshold {d} (avg: {d:.2}, std_dev: {d:.2})\"", .{
+                info.token_count,
+                info.threshold,
+                info.average,
+                info.std_dev,
+            }),
+            .binary => try writer.writeAll("\"binary file\""),
+        }
+        try writer.writeAll("\n    }");
+    }
+    try writer.writeAll("\n  ],\n");
+
+    // Write included files
+    try writer.writeAll("  \"includedFiles\": [\n");
     for (result.included_files, 0..) |file, i| {
         if (i > 0) try writer.writeAll(",\n");
         try writer.writeAll("    {\n");
@@ -130,6 +189,30 @@ pub fn writeCodeblocks(writer: anytype, result: file_handler.ProcessResult) !voi
     try writer.writeAll("file_types:\n");
     for (result.detected_file_types) |file_type| {
         try writer.print("  - {s}\n", .{@tagName(file_type)});
+    }
+
+    try writer.writeAll("\nexcluded_files:\n");
+    for (result.excluded_files) |excluded| {
+        try writer.print("  - path: {s}\n", .{excluded.file.path});
+        try writer.print("    tokens: {d}\n", .{excluded.file.token_count});
+        try writer.print("    lines: {d}\n", .{excluded.file.line_count});
+        try writer.print("    type: {s}\n", .{switch (excluded.file.file_type) {
+            .language => |lang| @tagName(lang),
+            .additional => |add| @tagName(add),
+            .unknown => "unknown",
+        }});
+        try writer.writeAll("    reason: ");
+        switch (excluded.reason) {
+            .ignored => |pattern| try writer.print("ignored by pattern: {s}\n", .{pattern}),
+            .configuration => try writer.writeAll("configuration file\n"),
+            .token_anomaly => |info| try writer.print("token count {d} exceeds threshold {d} (avg: {d:.2}, std_dev: {d:.2})\n", .{
+                info.token_count,
+                info.threshold,
+                info.average,
+                info.std_dev,
+            }),
+            .binary => try writer.writeAll("binary file\n"),
+        }
     }
     try writer.writeAll("---\n\n");
 
