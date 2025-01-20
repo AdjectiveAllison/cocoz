@@ -1,18 +1,11 @@
 .{
-    .name = "zig-webui-test",
+    .name = "code-contextor-zig",
     .version = "0.1.0",
-    .dependencies = .{
-        .@"zig-webui" = .{
-            .url = "git+https://github.com/webui-dev/zig-webui.git#96af9ece9dba546f6b38348252426c82b541ed96",
-            .hash = "1220e9ddde4b92e22b3afa2c85fb410b98b514ad6b64b4538184b112bb695e8084b3",
-        },
-    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
-        // For example...
-        //"LICENSE",
-        //"README.md",
+        "LICENSE",
+        "README.md",
     },
 }

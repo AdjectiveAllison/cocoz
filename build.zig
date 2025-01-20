@@ -11,17 +11,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     b.installArtifact(exe);
+
     const run_cmd = b.addRunArtifact(exe);
-
-    const zig_webui = b.dependency("zig-webui", .{
-        .target = target,
-        .optimize = optimize,
-        .enable_tls = false, // whether enable tls support
-        .is_static = true, // whether static link
-    });
-
-    // add module
-    exe.root_module.addImport("webui", zig_webui.module("webui"));
     run_cmd.step.dependOn(b.getInstallStep());
 
     // This allows the user to pass arguments to the application in the build
