@@ -42,10 +42,13 @@ pub fn main() !void {
     defer cli_options.deinit(allocator);
 
     const options = file_handler.ProcessOptions{
-        .ignore_patterns = cli_options.ignore_patterns orelse &.{"themes/"},
+        .ignore_patterns = cli_options.ignore_patterns orelse file_handler.default_ignore_patterns,
         .include_dot_files = cli_options.include_dot_files,
         .disable_config_filter = cli_options.disable_config_filter,
         .disable_token_filter = cli_options.disable_token_filter,
+        .disable_language_filter = cli_options.disable_language_filter,
+        .extensions = cli_options.extensions,
+        .max_tokens = cli_options.max_tokens,
     };
 
     // Process each target and combine results
@@ -71,72 +74,46 @@ pub fn main() !void {
     var unique_file_types = std.AutoHashMap(file_handler.AdditionalFileType, void).init(allocator);
     defer unique_file_types.deinit();
 
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+
     for (cli_options.targets) |target| {
         if (!cli_options.stdout_only) {
-            std.debug.print("Processing target: {s}\n", .{target});
+            try stderr.print("Processing target: {s}\n", .{target});
         }
 
         var result = try file_handler.processTarget(allocator, target, options);
-        defer result.deinit();
-
-        // Combine files
-        for (result.included_files) |file| {
-            const duped_path = try allocator.dupe(u8, file.path);
-            errdefer allocator.free(duped_path);
-            const duped_content = try allocator.dupe(u8, file.content);
-            errdefer allocator.free(duped_content);
-
-            try all_files.append(.{
-                .path = duped_path,
-                .content = duped_content,
-                .token_count = file.token_count,
-                .line_count = file.line_count,
-                .file_type = file.file_type,
-            });
+        defer {
+            // Clear the arrays before deinit to prevent double-free
+            result.included_files = &.{};
+            result.excluded_files = &.{};
+            result.detected_languages = &.{};
+            result.detected_file_types = &.{};
+            result.deinit();
         }
 
-        // Combine excluded files
-        for (result.excluded_files) |excluded| {
-            const duped_path = try allocator.dupe(u8, excluded.file.path);
-            errdefer allocator.free(duped_path);
-            const duped_content = try allocator.dupe(u8, excluded.file.content);
-            errdefer allocator.free(duped_content);
-            const duped_file = file_handler.FileInfo{
-                .path = duped_path,
-                .content = duped_content,
-                .token_count = excluded.file.token_count,
-                .line_count = excluded.file.line_count,
-                .file_type = excluded.file.file_type,
-            };
+        // Transfer ownership of included files
+        try all_files.appendSlice(result.included_files);
+        allocator.free(result.included_files);
+        result.included_files = &.{};
 
-            const duped_reason = switch (excluded.reason) {
-                .ignored => |pattern| file_handler.ExclusionReason{ .ignored = try allocator.dupe(u8, pattern) },
-                .configuration => .configuration,
-                .token_anomaly => |info| file_handler.ExclusionReason{
-                    .token_anomaly = .{
-                        .token_count = info.token_count,
-                        .threshold = info.threshold,
-                        .average = info.average,
-                        .std_dev = info.std_dev,
-                    },
-                },
-                .binary => .binary,
-            };
-
-            try all_excluded.append(.{
-                .file = duped_file,
-                .reason = duped_reason,
-            });
-        }
+        // Transfer ownership of excluded files
+        try all_excluded.appendSlice(result.excluded_files);
+        allocator.free(result.excluded_files);
+        result.excluded_files = &.{};
 
         // Combine languages and file types
         for (result.detected_languages) |lang| {
             try unique_languages.put(lang, {});
         }
+        allocator.free(result.detected_languages);
+        result.detected_languages = &.{};
 
         for (result.detected_file_types) |file_type| {
             try unique_file_types.put(file_type, {});
         }
+        allocator.free(result.detected_file_types);
+        result.detected_file_types = &.{};
     }
 
     // Create combined result
@@ -169,61 +146,59 @@ pub fn main() !void {
     };
     defer combined_result.deinit();
 
-    const stdout = std.io.getStdOut().writer();
-
     switch (cli_options.format) {
         .overview => {
-            if (cli_options.stdout_only) return;
-
-            // Print detected languages
-            if (combined_result.detected_languages.len > 0) {
-                std.debug.print("Detected language{s}: ", .{if (combined_result.detected_languages.len > 1) "s" else ""});
-                for (combined_result.detected_languages, 0..) |lang, i| {
-                    if (i > 0) std.debug.print(", ", .{});
-                    std.debug.print("{s}", .{@tagName(lang)});
-                }
-                std.debug.print("\n", .{});
-            }
-
-            // Print detected file types
-            if (combined_result.detected_file_types.len > 0) {
-                std.debug.print("Detected file type{s}: ", .{if (combined_result.detected_file_types.len > 1) "s" else ""});
-                for (combined_result.detected_file_types, 0..) |additional, i| {
-                    if (i > 0) std.debug.print(", ", .{});
-                    std.debug.print("{s}", .{@tagName(additional)});
-                }
-                std.debug.print("\n", .{});
-            }
-
-            // Print excluded files
-            if (combined_result.excluded_files.len > 0) {
-                std.debug.print("\nExcluded files:\n", .{});
-                for (combined_result.excluded_files) |excluded| {
-                    switch (excluded.reason) {
-                        .ignored => |pattern| std.debug.print("- {s} (ignored by pattern: {s})\n", .{ excluded.file.path, pattern }),
-                        .configuration => std.debug.print("- {s} (configuration file)\n", .{excluded.file.path}),
-                        .token_anomaly => |info| std.debug.print("- {s} (token count {d} exceeds threshold {d}, avg: {d:.2}, std_dev: {d:.2})\n", .{
-                            excluded.file.path,
-                            info.token_count,
-                            info.threshold,
-                            info.average,
-                            info.std_dev,
-                        }),
-                        .binary => std.debug.print("- {s} (binary file)\n", .{excluded.file.path}),
+            if (!cli_options.stdout_only) {
+                // Print detected languages
+                if (combined_result.detected_languages.len > 0) {
+                    try stderr.print("Detected language{s}: ", .{if (combined_result.detected_languages.len > 1) "s" else ""});
+                    for (combined_result.detected_languages, 0..) |lang, i| {
+                        if (i > 0) try stderr.writeAll(", ");
+                        try stderr.print("{s}", .{@tagName(lang)});
                     }
+                    try stderr.writeAll("\n");
                 }
-                std.debug.print("\n", .{});
-            }
 
-            // Print included files
-            std.debug.print("Included files after filtering:\n", .{});
-            var total_tokens: usize = 0;
-            for (combined_result.included_files) |file| {
-                std.debug.print("- {s} ({} tokens)\n", .{ file.path, file.token_count });
-                total_tokens += file.token_count;
-            }
+                // Print detected file types
+                if (combined_result.detected_file_types.len > 0) {
+                    try stderr.print("Detected file type{s}: ", .{if (combined_result.detected_file_types.len > 1) "s" else ""});
+                    for (combined_result.detected_file_types, 0..) |additional, i| {
+                        if (i > 0) try stderr.writeAll(", ");
+                        try stderr.print("{s}", .{@tagName(additional)});
+                    }
+                    try stderr.writeAll("\n");
+                }
 
-            std.debug.print("\nTotal tokens after filtering: {}\n", .{total_tokens});
+                // Print excluded files
+                if (combined_result.excluded_files.len > 0) {
+                    try stderr.writeAll("\nExcluded files:\n");
+                    for (combined_result.excluded_files) |excluded| {
+                        switch (excluded.reason) {
+                            .ignored => |pattern| try stderr.print("- {s} (ignored by pattern: {s})\n", .{ excluded.file.path, pattern }),
+                            .configuration => try stderr.print("- {s} (configuration file)\n", .{excluded.file.path}),
+                            .token_anomaly => |info| try stderr.print("- {s} (token count {d} exceeds threshold {d}, avg: {d:.2}, std_dev: {d:.2})\n", .{
+                                excluded.file.path,
+                                info.token_count,
+                                info.threshold,
+                                info.average,
+                                info.std_dev,
+                            }),
+                            .binary => try stderr.print("- {s} (binary file)\n", .{excluded.file.path}),
+                        }
+                    }
+                    try stderr.writeAll("\n");
+                }
+
+                // Print included files
+                try stderr.writeAll("Included files after filtering:\n");
+                var total_tokens: usize = 0;
+                for (combined_result.included_files) |file| {
+                    try stderr.print("- {s} ({} tokens)\n", .{ file.path, file.token_count });
+                    total_tokens += file.token_count;
+                }
+
+                try stderr.print("\nTotal tokens after filtering: {}\n", .{total_tokens});
+            }
         },
         .xml => try output.writeXml(stdout, combined_result),
         .json => try output.writeJson(stdout, combined_result),

@@ -70,7 +70,7 @@ pub const Language = enum {
             .{ ".xml", .xml },
         };
         for (extensions) |entry| {
-            if (std.mem.eql(u8, ext, entry[0])) {
+            if (std.ascii.eqlIgnoreCase(ext, entry[0])) {
                 return entry[1];
             }
         }
@@ -167,7 +167,7 @@ pub const AdditionalFileType = enum {
             return null;
         }
         inline for (std.meta.fields(AdditionalFileType)) |field| {
-            if (std.mem.eql(u8, ext[1..], field.name)) {
+            if (std.ascii.eqlIgnoreCase(ext[1..], field.name)) {
                 return @field(AdditionalFileType, field.name);
             }
         }
@@ -208,46 +208,60 @@ pub const ProcessResult = struct {
     allocator: Allocator,
 
     pub fn deinit(self: *ProcessResult) void {
-        for (self.included_files) |*file| {
-            file.deinit(self.allocator);
+        if (self.included_files.len > 0) {
+            for (self.included_files) |*file| {
+                file.deinit(self.allocator);
+            }
+            self.allocator.free(self.included_files);
         }
-        self.allocator.free(self.included_files);
 
-        for (self.excluded_files) |*excluded| {
-            excluded.deinit(self.allocator);
+        if (self.excluded_files.len > 0) {
+            for (self.excluded_files) |*excluded| {
+                excluded.deinit(self.allocator);
+            }
+            self.allocator.free(self.excluded_files);
         }
-        self.allocator.free(self.excluded_files);
 
-        self.allocator.free(self.detected_languages);
-        self.allocator.free(self.detected_file_types);
+        if (self.detected_languages.len > 0) {
+            self.allocator.free(self.detected_languages);
+        }
+
+        if (self.detected_file_types.len > 0) {
+            self.allocator.free(self.detected_file_types);
+        }
     }
 };
 
+// Default patterns to ignore
+pub const default_ignore_patterns = &[_][]const u8{
+    // Language-specific ignores
+    "package-lock.json", "yarn.lock",
+    "npm-debug.log",     "*.tsbuildinfo",
+    "Pipfile.lock",      "*.pyc",
+    "__pycache__",       "*.class",
+    "*.jar",             "target/",
+    "bin/",              "obj/",
+    "*.o",               "*.obj",
+    "*.exe",             "*.dll",
+    "*.so",              "*.dylib",
+    "vendor/",           "composer.lock",
+    "Gemfile.lock",      "*.gem",
+    "go.sum",            "Cargo.lock",
+    "*.swiftmodule",     "*.swiftdoc",
+    "*.kotlin_module",   "build/",
+    ".zig-cache",        "node_modules",
+    // Build files
+    "Makefile",          "CMakeLists.txt",
+};
+
 pub const ProcessOptions = struct {
-    ignore_patterns: []const []const u8 = &.{
-        // Language-specific ignores
-        "package-lock.json", "yarn.lock",
-        "npm-debug.log",     "*.tsbuildinfo",
-        "Pipfile.lock",      "*.pyc",
-        "__pycache__",       "*.class",
-        "*.jar",             "target/",
-        "bin/",              "obj/",
-        "*.o",               "*.obj",
-        "*.exe",             "*.dll",
-        "*.so",              "*.dylib",
-        "vendor/",           "composer.lock",
-        "Gemfile.lock",      "*.gem",
-        "go.sum",            "Cargo.lock",
-        "*.swiftmodule",     "*.swiftdoc",
-        "*.kotlin_module",   "build/",
-        ".zig-cache",        "node_modules",
-        // Build files
-        "build.zig",         "Makefile",
-        "CMakeLists.txt",
-    },
+    ignore_patterns: []const []const u8 = default_ignore_patterns,
     include_dot_files: ?[]const []const u8 = null,
     disable_config_filter: bool = false,
     disable_token_filter: bool = false,
+    disable_language_filter: bool = false,
+    extensions: ?[]const []const u8 = null,
+    max_tokens: ?usize = null,
 };
 
 const TokenAnomalyThreshold = 10000;
@@ -278,7 +292,39 @@ const BinaryDetectionConfig = struct {
     non_printable_threshold: f32 = 0.3, // 30% non-printable chars indicates binary
 };
 
+const MagicNumber = struct {
+    signature: []const u8,
+    offset: usize = 0,
+};
+
+const magic_numbers = [_]MagicNumber{
+    // Images
+    .{ .signature = "\x89PNG\x0D\x0A\x1A\x0A" }, // PNG
+    .{ .signature = "GIF87a" }, // GIF
+    .{ .signature = "GIF89a" }, // GIF
+    .{ .signature = "\xFF\xD8\xFF" }, // JPEG
+    // Archives
+    .{ .signature = "PK\x03\x04" }, // ZIP
+    .{ .signature = "\x1F\x8B\x08" }, // GZIP
+    // Executables
+    .{ .signature = "MZ" }, // DOS/PE
+    .{ .signature = "\x7FELF" }, // ELF
+    // PDFs
+    .{ .signature = "%PDF-" },
+};
+
 fn isBinaryContent(content: []const u8, config: BinaryDetectionConfig) bool {
+    // First check magic numbers
+    for (magic_numbers) |magic| {
+        if (content.len >= magic.offset + magic.signature.len) {
+            const slice = content[magic.offset .. magic.offset + magic.signature.len];
+            if (std.mem.eql(u8, slice, magic.signature)) {
+                return true;
+            }
+        }
+    }
+
+    // Then check for binary content patterns
     const sample_size = @min(content.len, config.sample_size);
     if (sample_size == 0) return false;
 
@@ -470,19 +516,9 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
             std.debug.print("Skipping binary file: {s}\n", .{target_path});
             allocator.free(content);
 
-            const duped_path = try allocator.dupe(u8, target_path);
-            errdefer allocator.free(duped_path);
-            const duped_content = try allocator.dupe(u8, "");
-            errdefer allocator.free(duped_content);
-
+            const empty_file = try createEmptyFileInfo(allocator, target_path, .unknown);
             try excluded.append(.{
-                .file = .{
-                    .path = duped_path,
-                    .content = duped_content,
-                    .token_count = 0,
-                    .line_count = 0,
-                    .file_type = .unknown,
-                },
+                .file = empty_file,
                 .reason = .binary,
             });
 
@@ -503,19 +539,9 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
                 std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{target_path});
                 allocator.free(content);
 
-                const duped_path = try allocator.dupe(u8, target_path);
-                errdefer allocator.free(duped_path);
-                const duped_content = try allocator.dupe(u8, "");
-                errdefer allocator.free(duped_content);
-
+                const empty_file = try createEmptyFileInfo(allocator, target_path, .unknown);
                 try excluded.append(.{
-                    .file = .{
-                        .path = duped_path,
-                        .content = duped_content,
-                        .token_count = 0,
-                        .line_count = 0,
-                        .file_type = .unknown,
-                    },
+                    .file = empty_file,
                     .reason = .binary,
                 });
 
@@ -532,19 +558,9 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
                     std.debug.print("Skipping over image file {s}.\n", .{target_path});
                     allocator.free(content);
 
-                    const duped_path = try allocator.dupe(u8, target_path);
-                    errdefer allocator.free(duped_path);
-                    const duped_content = try allocator.dupe(u8, "");
-                    errdefer allocator.free(duped_content);
-
+                    const empty_file = try createEmptyFileInfo(allocator, target_path, file_type);
                     try excluded.append(.{
-                        .file = .{
-                            .path = duped_path,
-                            .content = duped_content,
-                            .token_count = 0,
-                            .line_count = 0,
-                            .file_type = file_type,
-                        },
+                        .file = empty_file,
                         .reason = .binary,
                     });
 
@@ -565,23 +581,15 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
 
         // Check ignore patterns
         for (options.ignore_patterns) |pattern| {
-            if (std.mem.indexOf(u8, target_path, pattern) != null) {
+            if (isPathIgnored(target_path, pattern)) {
                 const duped_pattern = try allocator.dupe(u8, pattern);
                 errdefer allocator.free(duped_pattern);
-                const duped_path = try allocator.dupe(u8, target_path);
-                errdefer allocator.free(duped_path);
-                const duped_content = try allocator.dupe(u8, content);
-                errdefer allocator.free(duped_content);
+                const empty_file = try createEmptyFileInfo(allocator, target_path, .unknown);
+                errdefer allocator.free(empty_file.path);
                 allocator.free(content);
 
                 try excluded.append(.{
-                    .file = .{
-                        .path = duped_path,
-                        .content = duped_content,
-                        .token_count = 0,
-                        .line_count = 0,
-                        .file_type = file_type,
-                    },
+                    .file = empty_file,
                     .reason = .{ .ignored = duped_pattern },
                 });
 
@@ -595,6 +603,7 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
             }
         }
 
+        // Create file info with content
         const duped_path = try allocator.dupe(u8, target_path);
         errdefer allocator.free(duped_path);
         const duped_content = try allocator.dupe(u8, content);
@@ -637,6 +646,28 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
             const rel_path = try path.relative(allocator, target_path, full_path);
             defer allocator.free(rel_path);
 
+            const basename = path.basename(entry.path);
+
+            // Check hard-coded ignores first for all files/directories
+            const should_hard_ignore = for (hard_coded_ignores) |ignore| {
+                if (std.mem.indexOf(u8, rel_path, ignore) != null) break true;
+            } else false;
+
+            if (should_hard_ignore) continue;
+
+            // Handle dot files
+            if (basename.len > 0 and basename[0] == '.') {
+                // Skip dot files unless explicitly included
+                if (options.include_dot_files) |dot_files| {
+                    const should_include = for (dot_files) |pattern| {
+                        if (std.mem.eql(u8, basename, pattern)) break true;
+                    } else false;
+                    if (!should_include) continue;
+                } else {
+                    continue;
+                }
+            }
+
             // Check if we've moved up in the directory structure
             while (gitignore_stack.items.len > 1) {
                 const top_gitignore_dir = path.dirname(gitignore_stack.items[gitignore_stack.items.len - 1].base_path) orelse "";
@@ -647,7 +678,7 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
             }
 
             // Check if this is a new .gitignore file
-            if (std.mem.eql(u8, path.basename(entry.path), ".gitignore")) {
+            if (std.mem.eql(u8, basename, ".gitignore")) {
                 const gitignore_dir = path.dirname(full_path) orelse target_path;
                 const new_gitignore = try readAndParseGitignore(allocator, gitignore_dir);
                 try gitignore_stack.append(new_gitignore);
@@ -656,13 +687,6 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
 
             if (entry.kind != .file) continue;
 
-            // Check hard-coded ignores
-            const should_hard_ignore = for (hard_coded_ignores) |ignore| {
-                if (std.mem.indexOf(u8, rel_path, ignore) != null) break true;
-            } else false;
-
-            if (should_hard_ignore) continue;
-
             // Check .gitignore patterns
             const should_ignore = isIgnored(full_path, gitignore_stack.items);
 
@@ -670,7 +694,7 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
 
             // Check custom ignore patterns
             const should_custom_ignore = for (options.ignore_patterns) |pattern| {
-                if (std.mem.indexOf(u8, rel_path, pattern) != null) break true;
+                if (isPathIgnored(rel_path, pattern)) break true;
             } else false;
 
             if (should_custom_ignore) continue;
@@ -686,19 +710,9 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
                 std.debug.print("Skipping binary file: {s}\n", .{rel_path});
                 allocator.free(content);
 
-                const duped_path = try allocator.dupe(u8, rel_path);
-                errdefer allocator.free(duped_path);
-                const duped_content = try allocator.dupe(u8, "");
-                errdefer allocator.free(duped_content);
-
+                const empty_file = try createEmptyFileInfo(allocator, rel_path, .unknown);
                 try excluded.append(.{
-                    .file = .{
-                        .path = duped_path,
-                        .content = duped_content,
-                        .token_count = 0,
-                        .line_count = 0,
-                        .file_type = .unknown,
-                    },
+                    .file = empty_file,
                     .reason = .binary,
                 });
 
@@ -713,19 +727,9 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
                     std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{rel_path});
                     allocator.free(content);
 
-                    const duped_path = try allocator.dupe(u8, rel_path);
-                    errdefer allocator.free(duped_path);
-                    const duped_content = try allocator.dupe(u8, "");
-                    errdefer allocator.free(duped_content);
-
+                    const empty_file = try createEmptyFileInfo(allocator, rel_path, .unknown);
                     try excluded.append(.{
-                        .file = .{
-                            .path = duped_path,
-                            .content = duped_content,
-                            .token_count = 0,
-                            .line_count = 0,
-                            .file_type = .unknown,
-                        },
+                        .file = empty_file,
                         .reason = .binary,
                     });
 
@@ -736,19 +740,9 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
                         std.debug.print("Skipping over image file {s}.\n", .{rel_path});
                         allocator.free(content);
 
-                        const duped_path = try allocator.dupe(u8, rel_path);
-                        errdefer allocator.free(duped_path);
-                        const duped_content = try allocator.dupe(u8, "");
-                        errdefer allocator.free(duped_content);
-
+                        const empty_file = try createEmptyFileInfo(allocator, rel_path, file_type);
                         try excluded.append(.{
-                            .file = .{
-                                .path = duped_path,
-                                .content = duped_content,
-                                .token_count = 0,
-                                .line_count = 0,
-                                .file_type = file_type,
-                            },
+                            .file = empty_file,
                             .reason = .binary,
                         });
 
@@ -761,6 +755,7 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
                 },
             }
 
+            // Create file info with content
             const duped_path = try allocator.dupe(u8, rel_path);
             errdefer allocator.free(duped_path);
             const duped_content = try allocator.dupe(u8, content);
@@ -882,6 +877,7 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
     var excluded = std.ArrayList(ExcludedFile).init(allocator);
     var unique_languages = std.AutoHashMap(Language, void).init(allocator);
     var unique_file_types = std.AutoHashMap(AdditionalFileType, void).init(allocator);
+    var total_tokens: usize = 0;
 
     defer {
         unique_languages.deinit();
@@ -904,15 +900,48 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
         var keep = true;
         var exclusion_reason: ?ExclusionReason = null;
 
+        // Check if we've hit the max tokens limit
+        if (options.max_tokens) |max_tokens| {
+            if (total_tokens + file.token_count > max_tokens) {
+                break; // Stop processing more files
+            }
+        }
+
         // Check custom ignore patterns
         for (options.ignore_patterns) |pattern| {
-            if (std.mem.indexOf(u8, file.path, pattern) != null) {
+            if (isPathIgnored(file.path, pattern)) {
                 const duped_pattern = try allocator.dupe(u8, pattern);
                 errdefer allocator.free(duped_pattern);
                 exclusion_reason = ExclusionReason{ .ignored = duped_pattern };
                 keep = false;
                 break;
             }
+        }
+
+        // Check file extensions if specified
+        if (keep and options.extensions != null) {
+            const ext = std.fs.path.extension(file.path);
+            var ext_match = false;
+            for (options.extensions.?) |allowed_ext| {
+                if (std.ascii.eqlIgnoreCase(ext, allowed_ext)) {
+                    ext_match = true;
+                    break;
+                }
+            }
+            if (!ext_match) {
+                const duped_pattern = try allocator.dupe(u8, "extension not allowed");
+                errdefer allocator.free(duped_pattern);
+                exclusion_reason = ExclusionReason{ .ignored = duped_pattern };
+                keep = false;
+            }
+        }
+
+        // Handle unknown file types based on disable_language_filter
+        if (keep and file.file_type == .unknown and !options.disable_language_filter) {
+            const duped_pattern = try allocator.dupe(u8, "unknown file type");
+            errdefer allocator.free(duped_pattern);
+            exclusion_reason = ExclusionReason{ .ignored = duped_pattern };
+            keep = false;
         }
 
         if (keep and !options.disable_config_filter) {
@@ -928,18 +957,9 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
         }
 
         if (keep) {
-            const duped_path = try allocator.dupe(u8, file.path);
-            errdefer allocator.free(duped_path);
-            const duped_content = try allocator.dupe(u8, file.content);
-            errdefer allocator.free(duped_content);
-
-            try included.append(.{
-                .path = duped_path,
-                .content = duped_content,
-                .token_count = file.token_count,
-                .line_count = file.line_count,
-                .file_type = file.file_type,
-            });
+            const duped_file = try dupeFileInfo(allocator, file);
+            try included.append(duped_file);
+            total_tokens += file.token_count;
 
             switch (file.file_type) {
                 .language => |lang| try unique_languages.put(lang, {}),
@@ -947,19 +967,9 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
                 else => {},
             }
         } else if (exclusion_reason) |reason| {
-            const duped_path = try allocator.dupe(u8, file.path);
-            errdefer allocator.free(duped_path);
-            const duped_content = try allocator.dupe(u8, file.content);
-            errdefer allocator.free(duped_content);
-
+            const duped_file = try dupeFileInfo(allocator, file);
             try excluded.append(.{
-                .file = .{
-                    .path = duped_path,
-                    .content = duped_content,
-                    .token_count = file.token_count,
-                    .line_count = file.line_count,
-                    .file_type = file.file_type,
-                },
+                .file = duped_file,
                 .reason = reason,
             });
         }
@@ -972,14 +982,6 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
     allocator.free(files);
 
     if (!options.disable_token_filter) {
-        const total_tokens = blk: {
-            var sum: usize = 0;
-            for (included.items) |file| {
-                sum += file.token_count;
-            }
-            break :blk sum;
-        };
-
         if (total_tokens > TotalTokenThreshold) {
             const token_counts = try allocator.alloc(usize, included.items.len);
             defer allocator.free(token_counts);
@@ -1058,12 +1060,27 @@ fn getFileType(file_path: []const u8) FileType {
 
     // Handle files without extensions
     const basename = path.basename(file_path);
-    if (std.mem.eql(u8, basename, "Makefile") or std.mem.eql(u8, basename, "makefile")) {
-        return FileType{ .language = .shell };
-    } else if (std.mem.eql(u8, basename, "Dockerfile")) {
-        return FileType{ .language = .shell };
-    } else if (std.mem.eql(u8, basename, "LICENSE") or std.mem.eql(u8, basename, "README")) {
-        return FileType{ .additional = .txt };
+    const extensionless_files = [_]struct { []const u8, FileType }{
+        .{ "Makefile", .{ .language = .shell } },
+        .{ "makefile", .{ .language = .shell } },
+        .{ "Dockerfile", .{ .language = .shell } },
+        .{ "Jenkinsfile", .{ .language = .shell } },
+        .{ "LICENSE", .{ .additional = .txt } },
+        .{ "README", .{ .additional = .txt } },
+        .{ "CHANGELOG", .{ .additional = .txt } },
+        .{ "CONTRIBUTING", .{ .additional = .txt } },
+        .{ "AUTHORS", .{ .additional = .txt } },
+        .{ "CODEOWNERS", .{ .additional = .txt } },
+        .{ ".gitignore", .{ .additional = .conf } },
+        .{ ".gitattributes", .{ .additional = .conf } },
+        .{ ".editorconfig", .{ .additional = .conf } },
+        .{ ".env", .{ .additional = .conf } },
+    };
+
+    for (extensionless_files) |entry| {
+        if (std.mem.eql(u8, basename, entry[0])) {
+            return entry[1];
+        }
     }
 
     return FileType.unknown;
@@ -1086,10 +1103,122 @@ fn calculateAverage(numbers: []const usize) f64 {
 }
 
 fn calculateStandardDeviation(numbers: []const usize, average: f64) f64 {
+    if (numbers.len <= 1) return 0;
     var sum_squares: f64 = 0;
     for (numbers) |num| {
         const diff = @as(f64, @floatFromInt(num)) - average;
         sum_squares += diff * diff;
     }
-    return std.math.sqrt(sum_squares / @as(f64, @floatFromInt(numbers.len)));
+    return std.math.sqrt(sum_squares / @as(f64, @floatFromInt(numbers.len - 1)));
+}
+
+fn dupeFileInfo(allocator: Allocator, file: FileInfo) !FileInfo {
+    const duped_path = try allocator.dupe(u8, file.path);
+    errdefer allocator.free(duped_path);
+    const duped_content = try allocator.dupe(u8, file.content);
+    errdefer allocator.free(duped_content);
+
+    return FileInfo{
+        .path = duped_path,
+        .content = duped_content,
+        .token_count = file.token_count,
+        .line_count = file.line_count,
+        .file_type = file.file_type,
+    };
+}
+
+fn createEmptyFileInfo(allocator: Allocator, file_path: []const u8, file_type: FileType) !FileInfo {
+    const duped_path = try allocator.dupe(u8, file_path);
+    errdefer allocator.free(duped_path);
+    const duped_content = try allocator.dupe(u8, "");
+    errdefer allocator.free(duped_content);
+
+    return FileInfo{
+        .path = duped_path,
+        .content = duped_content,
+        .token_count = 0,
+        .line_count = 0,
+        .file_type = file_type,
+    };
+}
+
+fn isPathIgnored(file_path: []const u8, pattern: []const u8) bool {
+    // Split path into components
+    const path_components = std.mem.splitScalar(u8, file_path, path.sep);
+    var pattern_components = std.mem.splitScalar(u8, pattern, path.sep);
+
+    // If pattern starts with '/', it must match from the root
+    const is_anchored = pattern.len > 0 and pattern[0] == path.sep;
+    if (is_anchored) {
+        _ = pattern_components.next(); // Skip empty component from leading '/'
+    }
+
+    // Get all pattern components
+    var pattern_parts = std.ArrayList([]const u8).init(std.heap.page_allocator);
+    defer pattern_parts.deinit();
+    while (pattern_components.next()) |comp| {
+        pattern_parts.append(comp) catch return false;
+    }
+
+    // If pattern ends with '/', it must match a directory
+    const requires_dir = pattern.len > 0 and pattern[pattern.len - 1] == path.sep;
+    if (requires_dir) {
+        _ = pattern_parts.pop();
+    }
+
+    // For anchored patterns, we must match all components
+    if (is_anchored) {
+        var path_iter = path_components;
+        for (pattern_parts.items) |pattern_part| {
+            const path_part = path_iter.next() orelse return false;
+            if (!matchesPattern(path_part, pattern_part)) {
+                return false;
+            }
+        }
+        // If we matched all pattern parts, we're good (unless requires_dir)
+        return !requires_dir or path_iter.next() != null;
+    }
+
+    // For unanchored patterns, try matching at each path component
+    var matched_components: usize = 0;
+    var path_iter = path_components;
+    while (path_iter.next()) |path_part| {
+        if (matched_components == 0 and matchesPattern(path_part, pattern_parts.items[0])) {
+            matched_components = 1;
+            if (pattern_parts.items.len == 1) {
+                return !requires_dir or path_iter.next() != null;
+            }
+        } else if (matched_components > 0) {
+            if (matched_components < pattern_parts.items.len and
+                matchesPattern(path_part, pattern_parts.items[matched_components]))
+            {
+                matched_components += 1;
+                if (matched_components == pattern_parts.items.len) {
+                    return !requires_dir or path_iter.next() != null;
+                }
+            } else {
+                matched_components = 0;
+            }
+        }
+    }
+
+    return false;
+}
+
+fn matchesPattern(path_component: []const u8, pattern: []const u8) bool {
+    // Handle wildcards
+    if (std.mem.eql(u8, pattern, "*")) return true;
+    if (std.mem.startsWith(u8, pattern, "*") and std.mem.endsWith(u8, pattern, "*")) {
+        const inner = pattern[1 .. pattern.len - 1];
+        return std.mem.indexOf(u8, path_component, inner) != null;
+    }
+    if (std.mem.startsWith(u8, pattern, "*")) {
+        const suffix = pattern[1..];
+        return std.mem.endsWith(u8, path_component, suffix);
+    }
+    if (std.mem.endsWith(u8, pattern, "*")) {
+        const prefix = pattern[0 .. pattern.len - 1];
+        return std.mem.startsWith(u8, path_component, prefix);
+    }
+    return std.mem.eql(u8, path_component, pattern);
 }

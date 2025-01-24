@@ -41,7 +41,7 @@ pub fn writeXml(writer: anytype, result: file_handler.ProcessResult) !void {
     try writer.writeAll("  <excluded-files>\n");
     for (result.excluded_files) |excluded| {
         try writer.print("    <file path=\"{s}\" tokens=\"{d}\" lines=\"{d}\" type=\"{s}\">\n", .{
-            excluded.file.path,
+            escapeXmlAttr(excluded.file.path),
             excluded.file.token_count,
             excluded.file.line_count,
             switch (excluded.file.file_type) {
@@ -52,7 +52,7 @@ pub fn writeXml(writer: anytype, result: file_handler.ProcessResult) !void {
         });
         try writer.writeAll("      <reason>");
         switch (excluded.reason) {
-            .ignored => |pattern| try writer.print("ignored by pattern: {s}", .{pattern}),
+            .ignored => |pattern| try writer.print("ignored by pattern: {s}", .{escapeXmlText(pattern)}),
             .configuration => try writer.writeAll("configuration file"),
             .token_anomaly => |info| try writer.print("token count {d} exceeds threshold {d} (avg: {d:.2}, std_dev: {d:.2})", .{
                 info.token_count,
@@ -71,7 +71,7 @@ pub fn writeXml(writer: anytype, result: file_handler.ProcessResult) !void {
     try writer.writeAll("  <included-files>\n");
     for (result.included_files) |file| {
         try writer.print("    <file path=\"{s}\" tokens=\"{d}\" lines=\"{d}\" type=\"{s}\">\n", .{
-            file.path,
+            escapeXmlAttr(file.path),
             file.token_count,
             file.line_count,
             switch (file.file_type) {
@@ -80,10 +80,9 @@ pub fn writeXml(writer: anytype, result: file_handler.ProcessResult) !void {
                 .unknown => "unknown",
             },
         });
-        try writer.writeAll("      <![CDATA[\n");
-        try writer.writeAll(file.content);
-        try writer.writeAll("\n      ]]>\n");
-        try writer.writeAll("    </file>\n");
+        try writer.writeAll("      ");
+        try writeXmlEscapedCData(writer, file.content);
+        try writer.writeAll("\n    </file>\n");
     }
     try writer.writeAll("  </included-files>\n");
 
@@ -250,4 +249,35 @@ fn writeJsonString(writer: anytype, string: []const u8) !void {
         }
     }
     try writer.writeAll("\"");
+}
+
+fn writeXmlEscapedCData(writer: anytype, content: []const u8) !void {
+    var start: usize = 0;
+    var i: usize = 0;
+    try writer.writeAll("<![CDATA[");
+    while (i < content.len) : (i += 1) {
+        if (i + 2 < content.len and std.mem.eql(u8, content[i .. i + 3], "]]>")) {
+            // Write content up to this point
+            try writer.writeAll(content[start..i]);
+            // Close current CDATA and start a new one
+            try writer.writeAll("]]]]><![CDATA[>");
+            i += 2; // Skip over the "]]>" since we've handled it
+            start = i + 1;
+        }
+    }
+    // Write remaining content
+    try writer.writeAll(content[start..]);
+    try writer.writeAll("]]>");
+}
+
+fn escapeXmlText(text: []const u8) []const u8 {
+    // For now, just return the text unescaped
+    // TODO: Implement proper XML text escaping
+    return text;
+}
+
+fn escapeXmlAttr(text: []const u8) []const u8 {
+    // For now, just return the text unescaped
+    // TODO: Implement proper XML attribute escaping
+    return text;
 }
