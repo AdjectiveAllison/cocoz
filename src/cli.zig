@@ -141,20 +141,59 @@ fn parseList(allocator: Allocator, input: []const u8) ![]const []const u8 {
         list.deinit();
     }
 
-    var it = std.mem.split(u8, input, ",");
-    while (it.next()) |item| {
-        const trimmed = std.mem.trim(u8, item, " ");
-        if (trimmed.len == 0) continue;
-        const duped = try allocator.dupe(u8, trimmed);
-        try list.append(duped);
+    var i: usize = 0;
+    var start: usize = 0;
+    var escaped = false;
+
+    while (i < input.len) : (i += 1) {
+        if (input[i] == '\\' and !escaped) {
+            escaped = true;
+            continue;
+        }
+        if (input[i] == ',' and !escaped) {
+            const trimmed = std.mem.trim(u8, input[start..i], " ");
+            if (trimmed.len > 0) {
+                // Unescape any escaped characters in the trimmed string
+                const unescaped = try unescapeString(allocator, trimmed);
+                try list.append(unescaped);
+            }
+            start = i + 1;
+        }
+        escaped = false;
+    }
+
+    // Handle the last item
+    const trimmed = std.mem.trim(u8, input[start..], " ");
+    if (trimmed.len > 0) {
+        const unescaped = try unescapeString(allocator, trimmed);
+        try list.append(unescaped);
     }
 
     return try list.toOwnedSlice();
 }
 
+fn unescapeString(allocator: Allocator, input: []const u8) ![]const u8 {
+    var result = std.ArrayList(u8).init(allocator);
+    errdefer result.deinit();
+
+    var i: usize = 0;
+    var escaped = false;
+
+    while (i < input.len) : (i += 1) {
+        if (input[i] == '\\' and !escaped) {
+            escaped = true;
+            continue;
+        }
+        try result.append(input[i]);
+        escaped = false;
+    }
+
+    return try result.toOwnedSlice();
+}
+
 pub fn printHelp() void {
     const help_text =
-        \\Usage: code-contextor-zig [options] [directory|file ...]
+        \\Usage: cocoz [options] [directory|file ...]
         \\
         \\Arguments:
         \\  directory|file          Directory or file to process (default: current directory)
@@ -173,10 +212,10 @@ pub fn printHelp() void {
         \\  -h, --help                  Show this help message
         \\
         \\Examples:
-        \\  code-contextor-zig                     # Process current directory
-        \\  code-contextor-zig src/                # Process src directory
-        \\  code-contextor-zig file1.c file2.c     # Process specific files
-        \\  code-contextor-zig -f json src/        # Output JSON format
+        \\  cocoz                     # Process current directory
+        \\  cocoz src/                # Process src directory
+        \\  cocoz file1.c file2.c     # Process specific files
+        \\  cocoz -f json src/        # Output JSON format
         \\
     ;
     std.debug.print("{s}", .{help_text});
