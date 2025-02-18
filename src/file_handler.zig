@@ -920,10 +920,12 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
 
         // Check file extensions if specified
         if (keep and options.extensions != null) {
-            const ext = std.fs.path.extension(file.path);
+            const file_ext = std.fs.path.extension(file.path);
             var ext_match = false;
             for (options.extensions.?) |allowed_ext| {
-                if (std.ascii.eqlIgnoreCase(ext, allowed_ext)) {
+                const normalized_ext = try normalizeExtension(allocator, allowed_ext);
+                defer allocator.free(normalized_ext);
+                if (std.ascii.eqlIgnoreCase(file_ext, normalized_ext)) {
                     ext_match = true;
                     break;
                 }
@@ -1221,4 +1223,10 @@ fn matchesPattern(path_component: []const u8, pattern: []const u8) bool {
         return std.mem.startsWith(u8, path_component, prefix);
     }
     return std.mem.eql(u8, path_component, pattern);
+}
+
+fn normalizeExtension(allocator: Allocator, ext: []const u8) ![]const u8 {
+    if (ext.len == 0) return allocator.dupe(u8, "");
+    if (ext[0] == '.') return allocator.dupe(u8, ext);
+    return std.fmt.allocPrint(allocator, ".{s}", .{ext});
 }

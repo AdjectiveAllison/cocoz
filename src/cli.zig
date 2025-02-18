@@ -210,6 +210,7 @@ pub fn printHelp() void {
         \\Options:
         \\  -f, --format <format>       Output format (overview, xml, json, codeblocks)
         \\  -e, --extensions <list>     Comma-separated list of file extensions to include
+        \\                             (with or without leading dot, e.g. 'zig' or '.zig')
         \\  -i, --ignore <pattern>      Pattern to ignore (can be used multiple times or comma-separated)
         \\  -m, --max-tokens <number>   Maximum number of tokens to process
         \\  --stdout                    Only output the formatted content
@@ -226,6 +227,8 @@ pub fn printHelp() void {
         \\  cocoz -f json src/        # Output JSON format
         \\  cocoz -i "*.rs" -i "*.md" # Ignore Rust and Markdown files
         \\  cocoz -i "*.rs,*.md"      # Same as above using comma-separated list
+        \\  cocoz -e "zig,txt,md"     # Include files with these extensions
+        \\  cocoz -e ".zig,.txt,.md"  # Same as above with leading dots
         \\
     ;
     std.debug.print("{s}", .{help_text});
