@@ -70,11 +70,16 @@ pub fn parseArgs(allocator: Allocator, args: []const []const u8) !Options {
         .targets = undefined,
     };
     var targets = std.ArrayList([]const u8).init(allocator);
+    var ignore_patterns = std.ArrayList([]const u8).init(allocator);
     errdefer {
         for (targets.items) |target| {
             allocator.free(target);
         }
         targets.deinit();
+        for (ignore_patterns.items) |pattern| {
+            allocator.free(pattern);
+        }
+        ignore_patterns.deinit();
     }
 
     var i: usize = 1;
@@ -96,7 +101,8 @@ pub fn parseArgs(allocator: Allocator, args: []const []const u8) !Options {
                 i += 1;
                 if (i >= args.len) return error.MissingValue;
                 const patterns = try parseList(allocator, args[i]);
-                options.ignore_patterns = patterns;
+                try ignore_patterns.appendSlice(patterns);
+                allocator.free(patterns);
             } else if (std.mem.eql(u8, arg, "-m") or std.mem.eql(u8, arg, "--max-tokens")) {
                 i += 1;
                 if (i >= args.len) return error.MissingValue;
@@ -129,6 +135,7 @@ pub fn parseArgs(allocator: Allocator, args: []const []const u8) !Options {
     }
 
     options.targets = try targets.toOwnedSlice();
+    options.ignore_patterns = try ignore_patterns.toOwnedSlice();
     return options;
 }
 
@@ -202,7 +209,7 @@ pub fn printHelp() void {
         \\Options:
         \\  -f, --format <format>       Output format (overview, xml, json, codeblocks)
         \\  -e, --extensions <list>     Comma-separated list of file extensions to include
-        \\  -i, --ignore <list>         Comma-separated list of patterns to ignore
+        \\  -i, --ignore <pattern>      Pattern to ignore (can be used multiple times or comma-separated)
         \\  -m, --max-tokens <number>   Maximum number of tokens to process
         \\  --stdout                    Only output the formatted content
         \\  --disable-language-filter   Disable language-based filtering
@@ -216,6 +223,8 @@ pub fn printHelp() void {
         \\  cocoz src/                # Process src directory
         \\  cocoz file1.c file2.c     # Process specific files
         \\  cocoz -f json src/        # Output JSON format
+        \\  cocoz -i "*.rs" -i "*.md" # Ignore Rust and Markdown files
+        \\  cocoz -i "*.rs,*.md"      # Same as above using comma-separated list
         \\
     ;
     std.debug.print("{s}", .{help_text});

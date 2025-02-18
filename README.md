@@ -59,7 +59,7 @@ cocoz [options] [directory|file ...]
 
 - `-f, --format <format>`: Output format (overview, xml, json, codeblocks)
 - `-e, --extensions <list>`: Comma-separated list of file extensions to include
-- `-i, --ignore <list>`: Comma-separated list of patterns to ignore
+- `-i, --ignore <pattern>`: Pattern to ignore (can be used multiple times or comma-separated)
 - `-m, --max-tokens <number>`: Maximum number of tokens to process
 - `--stdout`: Only output the formatted content
 - `--disable-language-filter`: Disable language-based filtering
@@ -80,8 +80,11 @@ cocoz -f json src/
 # Process multiple files
 cocoz file1.c file2.c
 
-# Ignore specific patterns
-cocoz -i "node_modules,*.test.js" src/
+# Ignore patterns using multiple flags
+cocoz -i "*.rs" -i "*.md" src/
+
+# Ignore patterns using comma-separated list
+cocoz -i "*.test.js,node_modules" src/
 
 # Include specific dot files
 cocoz --include-dot-files ".env,.gitignore" .
