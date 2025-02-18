@@ -72,6 +72,7 @@ pub fn parseArgs(allocator: Allocator, args: []const []const u8) !Options {
     };
     var targets = std.ArrayList([]const u8).init(allocator);
     var ignore_patterns = std.ArrayList([]const u8).init(allocator);
+    var extensions = std.ArrayList([]const u8).init(allocator);
     errdefer {
         for (targets.items) |target| {
             allocator.free(target);
@@ -81,6 +82,10 @@ pub fn parseArgs(allocator: Allocator, args: []const []const u8) !Options {
             allocator.free(pattern);
         }
         ignore_patterns.deinit();
+        for (extensions.items) |ext| {
+            allocator.free(ext);
+        }
+        extensions.deinit();
     }
 
     var i: usize = 1;
@@ -96,8 +101,9 @@ pub fn parseArgs(allocator: Allocator, args: []const []const u8) !Options {
             } else if (std.mem.eql(u8, arg, "-e") or std.mem.eql(u8, arg, "--extensions")) {
                 i += 1;
                 if (i >= args.len) return error.MissingValue;
-                const extensions = try parseList(allocator, args[i]);
-                options.extensions = extensions;
+                const exts = try parseList(allocator, args[i]);
+                try extensions.appendSlice(exts);
+                allocator.free(exts);
             } else if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--ignore")) {
                 i += 1;
                 if (i >= args.len) return error.MissingValue;
@@ -137,6 +143,7 @@ pub fn parseArgs(allocator: Allocator, args: []const []const u8) !Options {
 
     options.targets = try targets.toOwnedSlice();
     options.ignore_patterns = try ignore_patterns.toOwnedSlice();
+    options.extensions = if (extensions.items.len > 0) try extensions.toOwnedSlice() else null;
     return options;
 }
 
@@ -209,8 +216,8 @@ pub fn printHelp() void {
         \\
         \\Options:
         \\  -f, --format <format>       Output format (overview, xml, json, codeblocks)
-        \\  -e, --extensions <list>     Comma-separated list of file extensions to include
-        \\                             (with or without leading dot, e.g. 'zig' or '.zig')
+        \\  -e, --extensions <list>     File extensions to include (comma-separated or multiple flags,
+        \\                             with/without leading dot e.g. 'zig,txt' or '-e zig -e txt')
         \\  -i, --ignore <pattern>      Pattern to ignore (can be used multiple times or comma-separated)
         \\  -m, --max-tokens <number>   Maximum number of tokens to process
         \\  --stdout                    Only output the formatted content
@@ -227,7 +234,7 @@ pub fn printHelp() void {
         \\  cocoz -f json src/        # Output JSON format
         \\  cocoz -i "*.rs" -i "*.md" # Ignore Rust and Markdown files
         \\  cocoz -i "*.rs,*.md"      # Same as above using comma-separated list
-        \\  cocoz -e "zig,txt,md"     # Include files with these extensions
+        \\  cocoz -e "zig,txt" -e md  # Include files with these extensions
         \\  cocoz -e ".zig,.txt,.md"  # Same as above with leading dots
         \\
     ;
