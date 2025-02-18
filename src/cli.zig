@@ -23,7 +23,7 @@ pub const Options = struct {
     ignore_patterns: ?[]const []const u8 = null,
     max_tokens: ?usize = null,
     disable_language_filter: bool = false,
-    disable_config_filter: bool = false,
+    disable_config_filter: bool = true,
     disable_token_filter: bool = false,
     include_dot_files: ?[]const []const u8 = null,
     stdout_only: bool = false,
@@ -68,6 +68,7 @@ pub fn parseArgs(allocator: Allocator, args: []const []const u8) !Options {
 
     var options = Options{
         .targets = undefined,
+        .disable_config_filter = true,
     };
     var targets = std.ArrayList([]const u8).init(allocator);
     var ignore_patterns = std.ArrayList([]const u8).init(allocator);
@@ -109,8 +110,8 @@ pub fn parseArgs(allocator: Allocator, args: []const []const u8) !Options {
                 options.max_tokens = try std.fmt.parseInt(usize, args[i], 10);
             } else if (std.mem.eql(u8, arg, "--disable-language-filter")) {
                 options.disable_language_filter = true;
-            } else if (std.mem.eql(u8, arg, "--disable-config-filter")) {
-                options.disable_config_filter = true;
+            } else if (std.mem.eql(u8, arg, "--enable-config-filter")) {
+                options.disable_config_filter = false;
             } else if (std.mem.eql(u8, arg, "--disable-token-filter")) {
                 options.disable_token_filter = true;
             } else if (std.mem.eql(u8, arg, "--include-dot-files")) {
@@ -213,7 +214,7 @@ pub fn printHelp() void {
         \\  -m, --max-tokens <number>   Maximum number of tokens to process
         \\  --stdout                    Only output the formatted content
         \\  --disable-language-filter   Disable language-based filtering
-        \\  --disable-config-filter     Disable configuration file filtering
+        \\  --enable-config-filter      Enable configuration file filtering (disabled by default)
         \\  --disable-token-filter      Disable token count anomaly filtering
         \\  --include-dot-files <list>  Comma-separated list of dot files to include
         \\  -h, --help                  Show this help message
