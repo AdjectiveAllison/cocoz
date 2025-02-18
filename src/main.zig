@@ -42,13 +42,25 @@ pub fn main() !void {
     defer cli_options.deinit(allocator);
 
     const options = file_handler.ProcessOptions{
-        .ignore_patterns = cli_options.ignore_patterns orelse file_handler.default_ignore_patterns,
+        .ignore_patterns = blk: {
+            if (cli_options.ignore_patterns) |user_patterns| {
+                // Combine default and user patterns
+                const combined = try allocator.alloc([]const u8, file_handler.default_ignore_patterns.len + user_patterns.len);
+                @memcpy(combined[0..file_handler.default_ignore_patterns.len], file_handler.default_ignore_patterns);
+                @memcpy(combined[file_handler.default_ignore_patterns.len..], user_patterns);
+                break :blk combined;
+            }
+            break :blk file_handler.default_ignore_patterns;
+        },
         .include_dot_files = cli_options.include_dot_files,
         .disable_config_filter = cli_options.disable_config_filter,
         .disable_token_filter = cli_options.disable_token_filter,
         .disable_language_filter = cli_options.disable_language_filter,
         .extensions = cli_options.extensions,
         .max_tokens = cli_options.max_tokens,
+    };
+    defer if (options.ignore_patterns.ptr != file_handler.default_ignore_patterns.ptr) {
+        allocator.free(options.ignore_patterns);
     };
 
     // Process each target and combine results
