@@ -58,7 +58,7 @@ cocoz [options] [directory|file ...]
 ### Options
 
 - `-f, --format <format>`: Output format (overview, xml, json, codeblocks)
-- `-e, --extensions <list>`: Comma-separated list of file extensions to include
+- `-e, --extensions <list>`: Comma-separated list of file extensions to include (with or without leading dot)
 - `-i, --ignore <pattern>`: Pattern to ignore (can be used multiple times or comma-separated)
 - `-m, --max-tokens <number>`: Maximum number of tokens to process
 - `--stdout`: Only output the formatted content
@@ -91,6 +91,12 @@ cocoz --include-dot-files ".env,.gitignore" .
 
 # Exclude configuration files
 cocoz --enable-config-filter src/
+
+# Include files with specific extensions (without dots)
+cocoz -e "zig,txt,md" src/
+
+# Include files with specific extensions (with dots)
+cocoz -e ".zig,.txt,.md" src/
 ```
 
 ## Token Counting
