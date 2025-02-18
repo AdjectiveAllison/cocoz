@@ -10,6 +10,7 @@ pub const FileInfo = struct {
     token_count: usize,
     line_count: usize,
     file_type: FileType,
+    is_explicit: bool = false,
 
     pub fn deinit(self: *FileInfo, allocator: Allocator) void {
         allocator.free(self.path);
@@ -579,31 +580,7 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
             },
         }
 
-        // Check ignore patterns
-        for (options.ignore_patterns) |pattern| {
-            if (isPathIgnored(target_path, pattern)) {
-                const duped_pattern = try allocator.dupe(u8, pattern);
-                errdefer allocator.free(duped_pattern);
-                const empty_file = try createEmptyFileInfo(allocator, target_path, .unknown);
-                errdefer allocator.free(empty_file.path);
-                allocator.free(content);
-
-                try excluded.append(.{
-                    .file = empty_file,
-                    .reason = .{ .ignored = duped_pattern },
-                });
-
-                return ProcessResult{
-                    .included_files = try files.toOwnedSlice(),
-                    .excluded_files = try excluded.toOwnedSlice(),
-                    .detected_languages = &[_]Language{},
-                    .detected_file_types = &[_]AdditionalFileType{},
-                    .allocator = allocator,
-                };
-            }
-        }
-
-        // Create file info with content
+        // Create file info with content - mark as explicit since it's a direct target
         const duped_path = try allocator.dupe(u8, target_path);
         errdefer allocator.free(duped_path);
         const duped_content = try allocator.dupe(u8, content);
@@ -616,6 +593,7 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
             .token_count = estimateTokenCount(duped_content, file_type),
             .line_count = try countLines(duped_content),
             .file_type = file_type,
+            .is_explicit = true, // Mark as explicit since it's a direct target
         });
     } else {
         // Process directory
@@ -900,61 +878,64 @@ pub fn processFiles(allocator: Allocator, files: []FileInfo, options: ProcessOpt
         var keep = true;
         var exclusion_reason: ?ExclusionReason = null;
 
-        // Check if we've hit the max tokens limit
+        // Check if we've hit the max tokens limit (applies to all files)
         if (options.max_tokens) |max_tokens| {
             if (total_tokens + file.token_count > max_tokens) {
                 break; // Stop processing more files
             }
         }
 
-        // Check custom ignore patterns
-        for (options.ignore_patterns) |pattern| {
-            if (isPathIgnored(file.path, pattern)) {
-                const duped_pattern = try allocator.dupe(u8, pattern);
-                errdefer allocator.free(duped_pattern);
-                exclusion_reason = ExclusionReason{ .ignored = duped_pattern };
-                keep = false;
-                break;
-            }
-        }
-
-        // Check file extensions if specified
-        if (keep and options.extensions != null) {
-            const file_ext = std.fs.path.extension(file.path);
-            var ext_match = false;
-            for (options.extensions.?) |allowed_ext| {
-                const normalized_ext = try normalizeExtension(allocator, allowed_ext);
-                defer allocator.free(normalized_ext);
-                if (std.ascii.eqlIgnoreCase(file_ext, normalized_ext)) {
-                    ext_match = true;
+        // For explicit files, bypass all filters except max_tokens
+        if (!file.is_explicit) {
+            // Check custom ignore patterns
+            for (options.ignore_patterns) |pattern| {
+                if (isPathIgnored(file.path, pattern)) {
+                    const duped_pattern = try allocator.dupe(u8, pattern);
+                    errdefer allocator.free(duped_pattern);
+                    exclusion_reason = ExclusionReason{ .ignored = duped_pattern };
+                    keep = false;
                     break;
                 }
             }
-            if (!ext_match) {
-                const duped_pattern = try allocator.dupe(u8, "extension not allowed");
+
+            // Check file extensions if specified
+            if (keep and options.extensions != null) {
+                const file_ext = std.fs.path.extension(file.path);
+                var ext_match = false;
+                for (options.extensions.?) |allowed_ext| {
+                    const normalized_ext = try normalizeExtension(allocator, allowed_ext);
+                    defer allocator.free(normalized_ext);
+                    if (std.ascii.eqlIgnoreCase(file_ext, normalized_ext)) {
+                        ext_match = true;
+                        break;
+                    }
+                }
+                if (!ext_match) {
+                    const duped_pattern = try allocator.dupe(u8, "extension not allowed");
+                    errdefer allocator.free(duped_pattern);
+                    exclusion_reason = ExclusionReason{ .ignored = duped_pattern };
+                    keep = false;
+                }
+            }
+
+            // Handle unknown file types based on disable_language_filter
+            if (keep and file.file_type == .unknown and !options.disable_language_filter) {
+                const duped_pattern = try allocator.dupe(u8, "unknown file type");
                 errdefer allocator.free(duped_pattern);
                 exclusion_reason = ExclusionReason{ .ignored = duped_pattern };
                 keep = false;
             }
-        }
 
-        // Handle unknown file types based on disable_language_filter
-        if (keep and file.file_type == .unknown and !options.disable_language_filter) {
-            const duped_pattern = try allocator.dupe(u8, "unknown file type");
-            errdefer allocator.free(duped_pattern);
-            exclusion_reason = ExclusionReason{ .ignored = duped_pattern };
-            keep = false;
-        }
-
-        if (keep and !options.disable_config_filter) {
-            switch (file.file_type) {
-                .additional => |additional| {
-                    if (additional.getInfo() == .config) {
-                        exclusion_reason = .configuration;
-                        keep = false;
-                    }
-                },
-                else => {},
+            if (keep and !options.disable_config_filter) {
+                switch (file.file_type) {
+                    .additional => |additional| {
+                        if (additional.getInfo() == .config) {
+                            exclusion_reason = .configuration;
+                            keep = false;
+                        }
+                    },
+                    else => {},
+                }
             }
         }
 
@@ -1141,6 +1122,7 @@ fn createEmptyFileInfo(allocator: Allocator, file_path: []const u8, file_type: F
         .token_count = 0,
         .line_count = 0,
         .file_type = file_type,
+        .is_explicit = false,
     };
 }
 
