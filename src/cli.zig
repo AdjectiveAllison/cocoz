@@ -6,6 +6,7 @@ pub const OutputFormat = enum {
     xml,
     json,
     codeblocks,
+    ctx,
 
     pub fn fromString(str: []const u8) !OutputFormat {
         inline for (std.meta.fields(OutputFormat)) |field| {
@@ -215,13 +216,13 @@ pub fn printHelp() void {
         \\                         Multiple directories/files can be specified
         \\
         \\Options:
-        \\  -f, --format <format>       Output format (overview, xml, json, codeblocks)
+        \\  -f, --format <format>       Output format (overview, xml, json, codeblocks, ctx)
         \\  -e, --extensions <list>     File extensions to include (comma-separated or multiple flags,
         \\                             with/without leading dot e.g. 'zig,txt' or '-e zig -e txt')
         \\  -i, --ignore <pattern>      Pattern to ignore (can be used multiple times or comma-separated)
         \\  -m, --max-tokens <number>   Maximum number of tokens to process
         \\  --stdout                    Only output the formatted content
-        \\  --disable-language-filter   Disable language-based filtering
+        \\  --disable-language-filter   Include files with unknown extensions/types
         \\  --enable-config-filter      Enable configuration file filtering (disabled by default)
         \\  --disable-token-filter      Disable token count anomaly filtering
         \\  --include-dot-files <list>  Comma-separated list of dot files to include
@@ -232,6 +233,7 @@ pub fn printHelp() void {
         \\  cocoz src/                # Process src directory
         \\  cocoz file1.c file2.c     # Process specific files
         \\  cocoz -f json src/        # Output JSON format
+        \\  cocoz -f ctx src/         # Output in CTX format (optimized for AI context)
         \\  cocoz -i "*.rs" -i "*.md" # Ignore Rust and Markdown files
         \\  cocoz -i "*.rs,*.md"      # Same as above using comma-separated list
         \\  cocoz -e "zig,txt" -e md  # Include files with these extensions

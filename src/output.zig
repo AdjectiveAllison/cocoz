@@ -1,5 +1,6 @@
 const std = @import("std");
 const file_handler = @import("file_handler.zig");
+const git = @import("git.zig");
 const Allocator = std.mem.Allocator;
 
 pub const OutputError = error{
@@ -227,6 +228,63 @@ pub fn writeCodeblocks(writer: anytype, result: file_handler.ProcessResult) !voi
         try writer.print("```{s}\n", .{lang_str});
         try writer.writeAll(file.content);
         try writer.writeAll("\n```\n\n");
+    }
+}
+
+pub fn writeCtx(writer: anytype, result: file_handler.ProcessResult, project_name: ?[]const u8) !void {
+    // Calculate total tokens
+    var total_tokens: usize = 0;
+    for (result.included_files) |file| {
+        total_tokens += file.token_count;
+    }
+
+    // Write header
+    try writer.writeAll("/// code context ///\n");
+    try writer.writeAll("|| METADATA\n");
+    
+    // Project name (if available)
+    if (project_name) |name| {
+        try writer.print("project::{s}\n", .{name});
+    }
+    
+    // Files and tokens counts
+    try writer.print("files::{d}\n", .{result.included_files.len});
+    try writer.print("tokens::{d}\n", .{total_tokens});
+    
+    // All detected languages
+    if (result.detected_languages.len > 0) {
+        try writer.writeAll("languages::");
+        for (result.detected_languages, 0..) |lang, i| {
+            if (i > 0) try writer.writeAll(",");
+            try writer.print("{s}", .{@tagName(lang)});
+        }
+        try writer.writeAll("\n");
+    }
+    
+    // All detected file types
+    if (result.detected_file_types.len > 0) {
+        try writer.writeAll("file_types::");
+        for (result.detected_file_types, 0..) |file_type, i| {
+            if (i > 0) try writer.writeAll(",");
+            try writer.print("{s}", .{@tagName(file_type)});
+        }
+        try writer.writeAll("\n");
+    }
+    
+    try writer.writeAll("||\n\n");
+
+    // Write each included file
+    for (result.included_files) |file| {
+        // Write file header with horizontal rule
+        try writer.writeAll("────────────────<< FILE >>────────────────\n");
+        try writer.print("path::{s}\n", .{file.path});
+        try writer.print("tokens::{d}\n", .{file.token_count});
+        try writer.print("lines::{d}\n", .{file.line_count});
+        
+        // Start content section
+        try writer.writeAll("────────────────<< START >>────────────────\n");
+        try writer.writeAll(file.content);
+        try writer.writeAll("\n────────────────<< END >>────────────────\n\n");
     }
 }
 
