@@ -17,3 +17,7 @@ zig-out/
 /build-*/
 /docgen_tmp/
 .aider*
+
+# Claude AI assistant files
+CLAUDE.md
+.claude/

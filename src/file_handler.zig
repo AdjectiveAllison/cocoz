@@ -33,6 +33,7 @@ pub const Language = enum {
     csharp,
     cpp,
     c,
+    cuda,
     php,
     ruby,
     go,
@@ -68,7 +69,7 @@ pub const Language = enum {
             .{ ".r", .r },           .{ ".lua", .lua },        .{ ".pl", .perl },
             .{ ".pm", .perl },       .{ ".t", .perl },         .{ ".hs", .haskell },
             .{ ".ex", .elixir },     .{ ".exs", .elixir },     .{ ".dart", .dart },
-            .{ ".xml", .xml },
+            .{ ".xml", .xml },       .{ ".cu", .cuda },
         };
         for (extensions) |entry| {
             if (std.ascii.eqlIgnoreCase(ext, entry[0])) {
@@ -99,6 +100,7 @@ pub const AdditionalFileType = enum {
     zon,
     cfg,
     md,
+    mdx,
     rst,
     txt,
     csv,
@@ -152,7 +154,7 @@ pub const AdditionalFileType = enum {
     pub fn getInfo(self: AdditionalFileType) FileTypeInfo {
         return switch (self) {
             .yaml, .yml, .toml, .ini, .conf, .json, .zon, .cfg => .config,
-            .md, .rst, .txt => .documentation,
+            .md, .mdx, .rst, .txt => .documentation,
             .csv, .tsv => .data,
             .png, .jpg, .jpeg, .gif, .svg, .ico, .webp => .image,
             .mp3, .wav, .ogg => .audio,
@@ -534,25 +536,30 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
 
         const file_type = getFileType(target_path);
 
-        // Skip unknown and image files
+        // Handle unknown file types and image files
         switch (file_type) {
             .unknown => {
-                std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{target_path});
-                allocator.free(content);
+                // Instead of always skipping, check if we should include unknown types
+                if (!options.disable_language_filter) {
+                    std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{target_path});
+                    allocator.free(content);
 
-                const empty_file = try createEmptyFileInfo(allocator, target_path, .unknown);
-                try excluded.append(.{
-                    .file = empty_file,
-                    .reason = .binary,
-                });
+                    const empty_file = try createEmptyFileInfo(allocator, target_path, .unknown);
+                    const pattern = try allocator.dupe(u8, "unknown file type");
+                    try excluded.append(.{
+                        .file = empty_file,
+                        .reason = .{ .ignored = pattern },
+                    });
 
-                return ProcessResult{
-                    .included_files = try files.toOwnedSlice(),
-                    .excluded_files = try excluded.toOwnedSlice(),
-                    .detected_languages = &[_]Language{},
-                    .detected_file_types = &[_]AdditionalFileType{},
-                    .allocator = allocator,
-                };
+                    return ProcessResult{
+                        .included_files = try files.toOwnedSlice(),
+                        .excluded_files = try excluded.toOwnedSlice(),
+                        .detected_languages = &[_]Language{},
+                        .detected_file_types = &[_]AdditionalFileType{},
+                        .allocator = allocator,
+                    };
+                } 
+                // If disable_language_filter is true, we'll continue and include the file
             },
             .additional => |additional| {
                 if (additional.getInfo() == .image) {
@@ -699,19 +706,24 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
 
             const file_type = getFileType(full_path);
 
-            // Skip unknown and image files
+            // Handle unknown and image files
             switch (file_type) {
                 .unknown => {
-                    std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{rel_path});
-                    allocator.free(content);
+                    // Instead of always skipping, check if we should include unknown types
+                    if (!options.disable_language_filter) {
+                        std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{rel_path});
+                        allocator.free(content);
 
-                    const empty_file = try createEmptyFileInfo(allocator, rel_path, .unknown);
-                    try excluded.append(.{
-                        .file = empty_file,
-                        .reason = .binary,
-                    });
+                        const empty_file = try createEmptyFileInfo(allocator, rel_path, .unknown);
+                        const pattern = try allocator.dupe(u8, "unknown file type");
+                        try excluded.append(.{
+                            .file = empty_file,
+                            .reason = .{ .ignored = pattern },
+                        });
 
-                    continue;
+                        continue;
+                    }
+                    // If disable_language_filter is true, we'll continue and include the file
                 },
                 .additional => |additional| {
                     if (additional.getInfo() == .image) {
@@ -823,9 +835,16 @@ pub fn estimateTokenCount(content: []const u8, file_type: FileType) usize {
     const base_count = switch (file_type) {
         .language => |lang| estimateLanguageTokens(content, lang),
         .additional => |additional| estimateAdditionalTokens(content, additional),
-        .unknown => unreachable, // Handle unknown types before this.,
+        .unknown => estimateUnknownTokens(content),
     };
     return base_count;
+}
+
+// Estimate tokens for unknown file types
+fn estimateUnknownTokens(content: []const u8) usize {
+    const char_count = content.len;
+    // Use a conservative estimate similar to text files
+    return @intFromFloat(@as(f32, @floatFromInt(char_count)) * 0.25);
 }
 
 fn estimateLanguageTokens(content: []const u8, language: Language) usize {
@@ -1058,6 +1077,9 @@ fn getFileType(file_path: []const u8) FileType {
         .{ ".gitattributes", .{ .additional = .conf } },
         .{ ".editorconfig", .{ .additional = .conf } },
         .{ ".env", .{ .additional = .conf } },
+        // TODO: These files was being treated as binary by my detection and this was bad, troubleshoot why and fix long term
+        .{ ".env.example", .{ .additional = .conf } },
+        .{ "config", .{ .additional = .conf } },
     };
 
     for (extensionless_files) |entry| {

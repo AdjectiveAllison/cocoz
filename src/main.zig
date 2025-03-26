@@ -2,6 +2,7 @@ const std = @import("std");
 const file_handler = @import("file_handler.zig");
 const cli = @import("cli.zig");
 const output = @import("output.zig");
+const git = @import("git.zig");
 
 fn fileTypeToString(file_type: file_handler.FileType) []const u8 {
     return switch (file_type) {
@@ -158,6 +159,17 @@ pub fn main() !void {
     };
     defer combined_result.deinit();
 
+    // Get current directory for project name detection
+    const cwd_path_buffer = try std.process.getCwdAlloc(allocator);
+    defer allocator.free(cwd_path_buffer);
+    
+    // Get project name for ctx format if needed
+    const project_name = if (cli_options.format == .ctx) 
+        git.getRepoName(allocator, cwd_path_buffer) catch null
+    else
+        null;
+    defer if (project_name) |name| allocator.free(name);
+
     switch (cli_options.format) {
         .overview => {
             if (!cli_options.stdout_only) {
@@ -215,5 +227,6 @@ pub fn main() !void {
         .xml => try output.writeXml(stdout, combined_result),
         .json => try output.writeJson(stdout, combined_result),
         .codeblocks => try output.writeCodeblocks(stdout, combined_result),
+        .ctx => try output.writeCtx(stdout, combined_result, project_name),
     }
 }
