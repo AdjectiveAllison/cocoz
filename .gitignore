@@ -21,3 +21,5 @@ zig-out/
 # Claude AI assistant files
 CLAUDE.md
 .claude/
+
+**/CLAUDE.local.md

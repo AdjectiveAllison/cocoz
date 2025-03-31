@@ -536,30 +536,15 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
 
         const file_type = getFileType(target_path);
 
-        // Handle unknown file types and image files
+        // For explicit file targets (directly specified), we handle them differently:
+        // 1. Always include them regardless of file type
+        // 2. Mark them as explicit for later filtering
+        
+        // Only handle image files specially, skip the unknown file type check for explicit targets
         switch (file_type) {
             .unknown => {
-                // Instead of always skipping, check if we should include unknown types
-                if (!options.disable_language_filter) {
-                    std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{target_path});
-                    allocator.free(content);
-
-                    const empty_file = try createEmptyFileInfo(allocator, target_path, .unknown);
-                    const pattern = try allocator.dupe(u8, "unknown file type");
-                    try excluded.append(.{
-                        .file = empty_file,
-                        .reason = .{ .ignored = pattern },
-                    });
-
-                    return ProcessResult{
-                        .included_files = try files.toOwnedSlice(),
-                        .excluded_files = try excluded.toOwnedSlice(),
-                        .detected_languages = &[_]Language{},
-                        .detected_file_types = &[_]AdditionalFileType{},
-                        .allocator = allocator,
-                    };
-                } 
-                // If disable_language_filter is true, we'll continue and include the file
+                // For explicit targets (when stat.kind == .file), we always include unknown file types
+                // No filtering here since this is an explicit file target
             },
             .additional => |additional| {
                 if (additional.getInfo() == .image) {
@@ -706,10 +691,11 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
 
             const file_type = getFileType(full_path);
 
-            // Handle unknown and image files
+            // We're in the directory traversal case where files are not explicit targets
+            // Handle unknown and image files 
             switch (file_type) {
                 .unknown => {
-                    // Instead of always skipping, check if we should include unknown types
+                    // Skip unknown file types if language filter is enabled
                     if (!options.disable_language_filter) {
                         std.debug.print("Skipping over file {s} because we don't know what type it is.\n", .{rel_path});
                         allocator.free(content);
