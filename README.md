@@ -164,6 +164,22 @@ The tool automatically detects and excludes binary files using a sophisticated d
 
 This ensures that only text-based files are included in the analysis.
 
+## Documentation
+
+Comprehensive documentation is available in the `docs` directory:
+
+- [Usage Guide](docs/usage_guide.md): Detailed instructions for using cocoz
+- [Architecture](docs/architecture.md): Overview of cocoz's architecture and components
+- [Output Formats](docs/output_formats.md): Details on the available output formats
+
+### Future Plans
+
+We have some ambitious plans for future development in our [Future Plans](docs/future_plans) directory:
+
+- [Codebase Knowledge System](docs/future_plans/codebase_knowledge_system.md): Vision for evolving cocoz into a comprehensive knowledge system
+- [Neovim Integration](docs/future_plans/neovim_integration.md): Plans for deeper Neovim editor integration
+- [State Management](docs/future_plans/state_management.md): Design for a file collection and session management system
+
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
