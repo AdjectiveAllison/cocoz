@@ -2,6 +2,12 @@
     .name = .cocoz,
     .fingerprint = 0x63d187e6e49722f8,
     .version = "0.1.0",
+
+    // This field is optional.
+    // This is currently advisory only; Zig does not yet do anything
+    // with this value.
+    .minimum_zig_version = "0.14.0",
+
     .dependencies = .{},
     .paths = .{
         "build.zig",
