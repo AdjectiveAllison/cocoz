@@ -643,7 +643,7 @@ pub fn processTarget(allocator: Allocator, target_path: []const u8, options: Pro
                 const top_gitignore_dir = path.dirname(gitignore_stack.items[gitignore_stack.items.len - 1].base_path) orelse "";
                 if (std.mem.startsWith(u8, entry.path, top_gitignore_dir)) break;
 
-                const popped = gitignore_stack.pop();
+                const popped = gitignore_stack.pop() orelse unreachable;
                 popped.deinit(allocator);
             }
 
